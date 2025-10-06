@@ -15,8 +15,6 @@ import torch.nn.functional as F
 from einops import rearrange
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from dfs.utils.logging import get_wandb_run, logging_disabled
-
 
 class Timer:
     """Context manager to time the execution of a block of code."""
@@ -285,13 +283,13 @@ def get_wandb_run(run_path: str):
 
 def load_from_wandb(run_path: str, extra_config: dict = {}, try_load_checkpoint: bool = True) -> dict:
     """Load a config from W&B run."""
-    with temp_env(WANDB_SILENT="true"), logging_disabled("lightning", "pytorch"):
-        run = get_wandb_run(run_path)
-        config = run.config
-        if "strategy" in config["trainer"]:  # and config["trainer"]["strategy"] == "ddp":
-            del config["trainer"]["strategy"]
-        config = OmegaConf.merge(config, extra_config)
-        instantiated_config = hydra.utils.instantiate(config)
+
+    run = get_wandb_run(run_path)
+    config = run.config
+    if "strategy" in config["trainer"]:  # and config["trainer"]["strategy"] == "ddp":
+        del config["trainer"]["strategy"]
+    config = OmegaConf.merge(config, extra_config)
+    instantiated_config = hydra.utils.instantiate(config)
 
     if try_load_checkpoint:
         try:
