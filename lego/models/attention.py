@@ -224,11 +224,11 @@ class TransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
-        start_pos: int,
+        input_pos: Optional[int] = None,
         mask: Optional[torch.Tensor] = None,
     ):
         h = x + self.drop_path(
-            self.attention(self.attention_norm(x), freqs_cis, start_pos, mask)
+            self.attention(self.attention_norm(x), freqs_cis, input_pos, mask)
         )
         out = h + self.drop_path(self.feed_forward(self.ffn_norm(h)))
         return out
