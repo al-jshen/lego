@@ -3,7 +3,6 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from .modules import DropPath, FeedForward
 from .norm import RMSNorm
@@ -169,16 +168,15 @@ class Attention(nn.Module):
             for _ in range(n_expand):
                 mask = mask.unsqueeze(1)
 
-        with sdpa_kernel(SDPBackend.MATH):
-            output = F.scaled_dot_product_attention(
-                xq,
-                keys,
-                values,
-                attn_mask=mask,
-                is_causal=self.causal
-                and mask is None,  # is_causal=False is for KV cache
-                dropout_p=self.attn_dropout_p if self.training else 0,
-            )
+        output = F.scaled_dot_product_attention(
+            xq,
+            keys,
+            values,
+            attn_mask=mask,
+            is_causal=self.causal
+            and mask is None,  # is_causal=False is for KV cache
+            dropout_p=self.attn_dropout_p if self.training else 0,
+        )
 
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, self.dim)
 
