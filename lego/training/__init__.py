@@ -24,7 +24,6 @@ from torch.distributed.checkpoint.state_dict import (
     get_state_dict,
     set_state_dict,
 )
-from torch.distributed.checkpoint.state_dict_saver import AsyncCheckpointerType
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.fsdp import (
     CPUOffloadPolicy,
@@ -101,10 +100,13 @@ class CheckpointManager:
         if self.async_save and self.pg is not None:
             if self.future is not None:
                 print("Waiting for previous checkpointing future to complete")
-                self.future.result()
-                self.future = None
-
-                dist.barrier(self.pg)
+                try:
+                    self.future.result()
+                except Exception as e:
+                    print(f"Previous checkpoint save failed: {e}")
+                    # Continue with new checkpoint save attempt
+                finally:
+                    self.future = None
 
             self.future = dcp.async_save(
                 state_dict,
@@ -138,6 +140,16 @@ class CheckpointManager:
             print(f"Checkpoint loaded from {load_path}")
 
         return state_dict["epoch"], state_dict["step"]
+
+    def cleanup(self):
+        """Ensure all pending async operations complete before shutdown."""
+        if self.future is not None:
+            try:
+                self.future.result()
+            except Exception as e:
+                print(f"Final checkpoint save failed: {e}")
+            finally:
+                self.future = None
 
 
 def seed_everything(seed: int):
@@ -1288,6 +1300,9 @@ class Trainer:
                 for logger in self.logger:
                     logger.log(log_dict, step=self.global_step)
 
+        # Ensure all pending async checkpoint operations complete before shutdown
+        self.ckpt_manager.cleanup()
+        
         dist.destroy_process_group()
 
     # -------------------------------
