@@ -23,6 +23,16 @@ def precompute_freqs_cis(seq_len: int, n_elem: int, base: int = 10000, cls_token
         [torch.zeros(cls_token_num, n_elem // 2, 2), cache]
     )  # (cls_token_num+seq_len, head_dim // 2, 2)
     return cond_cache
+    
+
+class RotaryEmbedding(torch.nn.Module):
+    """From https://github.com/pytorch/torchtitan/blob/main/torchtitan/models/llama/model.py"""
+
+    def __init__(self, dim, theta=10000, max_seq_len: int = 2048, theta_rescale=1.0):
+        super().__init__()
+        theta = theta * theta_rescale ** (dim / (dim - 2))
+        freqs_cis = precompute_freqs_cis(dim, max_seq_len * 2, theta=theta)
+        self.register_buffer("freqs_cis", freqs_cis, persistent=True)
 
 
 def precompute_freqs_cis_2d(
