@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from functools import reduce
 from typing import Iterable, Optional, Set, Tuple, Type
 
+import wandb
 import hydra
 import numpy as np
 import torch
