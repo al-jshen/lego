@@ -505,13 +505,29 @@ class Optimizer:
             else optim.lr_scheduler.ConstantLR(optimizer, factor=1)
         )
 
+        if self.scheduler == "cosine":
+            schedulers.append(
+                optim.lr_scheduler.ConstantLR(optimizer, factor=1)
+            )
+
+        milestones = []
+        if self.warmup_steps > 0:
+            milestones.append(self.warmup_steps)
+        if self.scheduler == "cosine":
+            milestones.append(self.scheduler_max_steps)
+        if len(milestones) == 0:
+            milestones = None
+
+        if len(schedulers) > 1:
+            assert milestones is not None
+
         lr_scheduler = (
             optim.lr_scheduler.SequentialLR(
                 optimizer,
                 schedulers,
-                milestones=[self.warmup_steps],
+                milestones=milestones,
             )
-            if self.warmup_steps > 0
+            if len(schedulers) > 1
             else schedulers[0]
         )
         return optimizer, lr_scheduler
