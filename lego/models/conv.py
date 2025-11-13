@@ -477,6 +477,8 @@ class ConvNextEncoderND(nn.Module):
         super().__init__()
         assert len(depths) == len(dims), "depths and dims should have the same length"
         self.spatial_dims = spatial_dims
+        self.depths = depths
+        self.dims = dims
         num_layers = len(depths)
         convnext_block = (
             ConvNextV2BlockND
@@ -570,6 +572,8 @@ class ConvNextDecoderND(nn.Module):
         super().__init__()
         assert len(depths) == len(dims), "depths and dims should have the same length"
         self.spatial_dims = spatial_dims
+        self.depths = depths
+        self.dims = dims
         num_layers = len(depths)
         convnext_block = (
             ConvNextV2BlockND
