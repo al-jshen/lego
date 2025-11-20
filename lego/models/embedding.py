@@ -2,6 +2,49 @@ import torch
 import torch.nn as nn
 import math
 from functools import lru_cache
+from lego.models.modules import MLP
+
+
+class TimestepEmbedder(nn.Module):
+    """
+    Embeds scalar timesteps using sinusoidal embeddings and an MLP.
+    """
+
+    def __init__(self, hidden_dim, embedding_dim=256):
+        super().__init__()
+        self.mlp = MLP(
+            input_dim=embedding_dim, output_dim=embedding_dim, hidden_dim=hidden_dim
+        )
+        self.embedding_dim = embedding_dim
+
+    @staticmethod
+    def timestep_embedding(t, dim, max_period=10000):
+        """
+        Create sinusoidal timestep embeddings.
+        :param t: a 1-D Tensor of N indices, one per batch element.
+                          These may be fractional.
+        :param dim: the dimension of the output.
+        :param max_period: controls the minimum frequency of the embeddings.
+        :return: an (N, D) Tensor of positional embeddings.
+        """
+        half = dim // 2
+        freqs = torch.exp(
+            -math.log(max_period)
+            * torch.arange(start=0, end=half, dtype=t.dtype)
+            / half
+        ).to(t)
+        args = t[:, None].to(t) * freqs[None]
+        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+        if dim % 2:
+            embedding = torch.cat(
+                [embedding, torch.zeros_like(embedding[:, :1])], dim=-1
+            )
+        return embedding
+
+    def forward(self, t):
+        t_freq = self.timestep_embedding(t, self.embedding_dim)
+        t_emb = self.mlp(t_freq)
+        return t_emb
 
 
 class SinusoidalEmbedding(nn.Module):
@@ -32,7 +75,9 @@ class SinusoidalEmbedding(nn.Module):
 
 
 @lru_cache
-def sinusoidal_embedding_1d(n: int | torch.Tensor, dim, temperature=10000, dtype=torch.float32):
+def sinusoidal_embedding_1d(
+    n: int | torch.Tensor, dim, temperature=10000, dtype=torch.float32
+):
     if isinstance(n, int) or (isinstance(n, torch.Tensor) and n.numel() == 1):
         n = torch.arange(n)
     else:
@@ -52,7 +97,11 @@ def sinusoidal_embedding_1d(n: int | torch.Tensor, dim, temperature=10000, dtype
 
 @lru_cache
 def sinusoidal_embedding_2d(
-    h: int | torch.Tensor, w: int | torch.Tensor, dim, temperature: int = 10000, dtype=torch.float32
+    h: int | torch.Tensor,
+    w: int | torch.Tensor,
+    dim,
+    temperature: int = 10000,
+    dtype=torch.float32,
 ):
     assert type(h) is type(w), "h and w must be of the same type"
     if isinstance(h, int) or (isinstance(h, torch.Tensor) and h.numel() == 1):

@@ -78,7 +78,13 @@ class MLP(nn.Module):
             nn.Dropout(dropout),
         )
 
-        self.net.apply(self.init_weights)
+        self.apply(self.init_weights)
+
+    def init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
     def forward(self, x):
         return self.net(x)

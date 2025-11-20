@@ -5,6 +5,11 @@ import torch
 import torch.nn as nn
 from torchdiffeq import odeint, odeint_adjoint
 
+from lego.models.norm import MaybeAdaLayerNorm
+from lego.models.modules import MLP
+from lego.models.embedding import TimestepEmbedder
+from lego.utils import linear_init
+
 
 def autograd_trace(outputs, inputs):
     trJ = 0.0
@@ -261,3 +266,59 @@ class RectifiedFlow(nn.Module):
 
         log_prob = self.log_prob_base(out)
         return log_prob + delta_logp
+
+
+class MLPBackbone(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        cond_dim: int = 0,
+        embed_dim: int = 256,
+        hidden_dim: int = 1024,
+        num_layers: int = 16,
+        activation="SiLU",
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.cond_dim = cond_dim
+        self.embed_dim = embed_dim
+        self.num_layers = num_layers
+        self.act = getattr(nn, activation)()
+        self.in_proj = nn.Linear(input_dim, embed_dim)
+        self.adanorms = nn.ModuleList([MaybeAdaLayerNorm(embed_dim, cond_dim) for _ in range(num_layers)])
+        self.blocks = nn.ModuleList(
+            [
+                MLP(
+                    input_dim=embed_dim,
+                    output_dim=embed_dim,
+                    hidden_dim=hidden_dim,
+                    dropout=dropout,
+                    activation=self.act,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+        self.out_proj = nn.Linear(embed_dim, input_dim)
+        self.temb = TimestepEmbedder(hidden_dim=hidden_dim, embedding_dim=embed_dim)
+
+        self.apply(self.init_weights)
+        nn.init.constant_(self.out_proj.weight, 0.0)
+
+    def init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            linear_init(m)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x, t, context=None):
+        temb = self.temb(t)
+        x = self.in_proj(x)
+        for norm, block in zip(self.adanorms, self.blocks):
+            shortcut = x
+            x = norm(x, context)
+            x = block(x + temb)
+            x = x + shortcut
+        x = self.out_proj(x)
+        return x
