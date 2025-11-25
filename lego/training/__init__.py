@@ -459,6 +459,7 @@ class Optimizer:
         scheduler: Literal["cosine", "constant"] = "cosine",
         scheduler_max_steps: Optional[int] = None,
         warmup_steps: int = 0,
+        min_lr: Optional[float] = 1e-6,
     ):
         self.lr = lr
         self.betas = betas
@@ -469,6 +470,7 @@ class Optimizer:
         self.scheduler = scheduler
         self.scheduler_max_steps = scheduler_max_steps
         self.warmup_steps = warmup_steps
+        self.min_lr = min_lr
 
     def setup(
         self, model
@@ -499,7 +501,9 @@ class Optimizer:
 
         schedulers.append(
             optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=self.scheduler_max_steps
+                optimizer,
+                T_max=self.scheduler_max_steps,
+                eta_min=self.min_lr,
             )
             if self.scheduler == "cosine"
             else optim.lr_scheduler.ConstantLR(optimizer, factor=1)
@@ -507,7 +511,7 @@ class Optimizer:
 
         if self.scheduler == "cosine":
             schedulers.append(
-                optim.lr_scheduler.ConstantLR(optimizer, factor=1)
+                optim.lr_scheduler.ConstantLR(optimizer, factor=self.min_lr / self.lr)
             )
 
         milestones = []
@@ -1038,6 +1042,7 @@ class Trainer:
                 "Optimization",
                 [
                     ("Peak Learning Rate", self.base_optimizer.lr),
+                    ("Min Learning Rate", self.base_optimizer.min_lr),
                     ("Weight Decay", self.base_optimizer.weight_decay),
                     ("Gradient Accumulation Steps", self.gradient_accumulation_steps),
                     (
@@ -1318,7 +1323,7 @@ class Trainer:
 
         # Ensure all pending async checkpoint operations complete before shutdown
         self.ckpt_manager.cleanup()
-        
+
         dist.destroy_process_group()
 
     # -------------------------------
