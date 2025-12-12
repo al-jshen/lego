@@ -639,3 +639,131 @@ class ConvNextDecoderND(nn.Module):
             x = us(x)
             x = st(x)
         return x
+
+
+_kernel_sizes = {
+    1: (1, 1, 1),
+    2: (2, 1, 1),
+    4: (2, 2, 1),
+    8: (2, 2, 2),
+    16: (4, 2, 2),
+    32: (4, 4, 2),
+    64: (4, 4, 4),
+}
+
+
+def build_kernel_size(patch_size):
+    patch_size = tuple(patch_size)
+    # back pad with 1 until length 3
+    patch_size = patch_size + (1,) * (3 - len(patch_size))
+    return list(zip(*[_kernel_sizes[s] for s in patch_size]))
+
+
+class hMLP_embed(nn.Module):
+    """Image to Patch Embedding"""
+
+    def __init__(
+        self,
+        patch_size=(16, 16, 16),
+        in_chans=3,
+        embed_dim=768,
+    ):
+        super().__init__()
+        spatial_dims = len(patch_size)
+        self.kernel_sizes = build_kernel_size(patch_size)
+        self.patch_size = patch_size
+        self.spatial_dims = spatial_dims
+        self.in_proj = nn.Sequential(
+            *[
+                nn.Conv3d(
+                    in_chans,
+                    embed_dim // 4,
+                    kernel_size=self.kernel_sizes[0],
+                    stride=self.kernel_sizes[0],
+                    bias=False,
+                    padding=0,
+                ),
+                nn.InstanceNorm3d(embed_dim // 4, affine=True),
+                nn.GELU(),
+                nn.Conv3d(
+                    embed_dim // 4,
+                    embed_dim // 4,
+                    kernel_size=self.kernel_sizes[1],
+                    stride=self.kernel_sizes[1],
+                    bias=False,
+                    padding=0,
+                ),
+                nn.InstanceNorm3d(embed_dim // 4, affine=True),
+                nn.GELU(),
+                nn.Conv3d(
+                    embed_dim // 4,
+                    embed_dim,
+                    kernel_size=self.kernel_sizes[2],
+                    stride=self.kernel_sizes[2],
+                    bias=False,
+                    padding=0,
+                ),
+                nn.InstanceNorm3d(embed_dim, affine=True),
+            ]
+        )
+
+    def forward(self, x):
+        # b c h w
+        if self.spatial_dims == 1:
+            return self.in_proj(x.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
+        if self.spatial_dims == 2:
+            return self.in_proj(x.unsqueeze(-1)).squeeze(-1)
+        # b c h w d
+        return self.in_proj(x)
+
+
+class hMLP_debed(nn.Module):
+    """Patch to Image Debedding"""
+
+    def __init__(
+        self,
+        embed_dim=768,
+        out_chans=3,
+        patch_size=(16, 16, 16),
+    ):
+        super().__init__()
+        spatial_dims = len(patch_size)
+        self.kernel_sizes = build_kernel_size(patch_size)
+        self.patch_size = patch_size
+        self.spatial_dims = spatial_dims
+
+        self.out_proj = torch.nn.Sequential(
+            *[
+                nn.ConvTranspose3d(
+                    embed_dim,
+                    embed_dim // 4,
+                    kernel_size=self.kernel_sizes[0],
+                    stride=self.kernel_sizes[0],
+                    bias=False,
+                ),
+                nn.InstanceNorm3d(embed_dim // 4, affine=True),
+                nn.GELU(),
+                nn.ConvTranspose3d(
+                    embed_dim // 4,
+                    embed_dim // 4,
+                    kernel_size=self.kernel_sizes[1],
+                    stride=self.kernel_sizes[1],
+                    bias=False,
+                ),
+                nn.InstanceNorm3d(embed_dim // 4, affine=True),
+                nn.GELU(),
+                nn.ConvTranspose3d(
+                    embed_dim // 4,
+                    out_chans,
+                    kernel_size=self.kernel_sizes[2],
+                    stride=self.kernel_sizes[2],
+                ),
+            ]
+        )
+
+    def forward(self, x):
+        if self.spatial_dims == 1:
+            return self.out_proj(x.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
+        if self.spatial_dims == 2:
+            return self.out_proj(x.unsqueeze(-1)).squeeze(-1)
+        return self.out_proj(x)
