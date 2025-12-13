@@ -78,7 +78,11 @@ class CheckpointManager:
 
     def save(self, save_path, model, optimizer, scheduler, epoch, step):
         if self.pg is None:
-            self.pg = dist.new_group(backend="gloo")
+            if dist.get_pg_count() > 0:
+                self.pg = dist.new_group(backend="gloo")
+            else:
+                self.pg = dist.init_process_group(backend="gloo")
+
         # self.checkpointer.save(self.model, self.optimizer, self.scheduler, epoch, step)
         state_dict = {
             "model_opt": ModelOptState(model, optimizer),
@@ -592,6 +596,7 @@ class Trainer:
         | CompilePolicy = False,  # bool → whole model, set of types → selective
         ckpt_save_dir: str = "./checkpoints",
         ckpt_load_dir: Optional[str] = None,
+        reset_steps: bool = False,
         ckpt_every_n_steps: Optional[int] = None,
         ckpt_every_n_epochs: int = 1,
         async_checkpoint: bool = True,
@@ -621,6 +626,7 @@ class Trainer:
             compile_cfg=compile,
             ckpt_save_dir=ckpt_save_dir,
             ckpt_load_dir=ckpt_load_dir,
+            reset_steps=reset_steps,
             ckpt_every_n_steps=ckpt_every_n_steps,
             ckpt_every_n_epochs=ckpt_every_n_epochs,
             async_checkpoint=async_checkpoint,
@@ -737,14 +743,15 @@ class Trainer:
         self.global_step = 0
         if self.ckpt_load_dir:
             epoch, step = self._load_checkpoint(self.ckpt_load_dir)
-            self.start_epoch = epoch
-            self.global_step = step
+            if not self.reset_steps:
+                self.start_epoch = epoch
+                self.global_step = step
             if (
                 not (dist.is_available() and dist.is_initialized())
                 or dist.get_rank() == 0
             ):
                 print(
-                    f"Loaded from checkpoint, resuming from epoch {self.start_epoch}, step {self.global_step}"
+                    f"Loaded model from checkpoint, starting from epoch {self.start_epoch}, step {self.global_step}"
                 )
 
     @property
@@ -1326,7 +1333,8 @@ class Trainer:
         # Ensure all pending async checkpoint operations complete before shutdown
         self.ckpt_manager.cleanup()
 
-        dist.destroy_process_group()
+        if dist.get_pg_count() > 0:
+            dist.destroy_process_group()
 
     # -------------------------------
     # Validation
