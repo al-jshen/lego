@@ -757,12 +757,12 @@ class Trainer:
     # -------------------------------
     def distribute_model(
         self, model: nn.Module, **kwargs
-    ) -> dist.device_mesh.DeviceMesh:
+    ) -> Optional[dist.device_mesh.DeviceMesh]:
         if not self.strategy and self.world_size <= 1:
             print(
                 f"[Rank {self.global_rank}] Running in single-GPU mode, no wrapping applied."
             )
-            return model
+            return None
 
         if self.strategy is None:
             print(
@@ -1065,13 +1065,15 @@ class Trainer:
                     (
                         "CPU OffloadPolicy",
                         "Enabled"
-                        if self.strategy.fsdp_kwargs.get("offload_policy")
+                        if self.strategy
+                        and self.strategy.fsdp_kwargs.get("offload_policy")
                         else "Disabled",
                     ),
                     (
                         "Reshard after forward",
                         "Enabled"
-                        if self.strategy.fsdp_kwargs.get("reshard_after_forward")
+                        if self.strategy
+                        and self.strategy.fsdp_kwargs.get("reshard_after_forward")
                         else "Disabled",
                     ),
                     (
