@@ -928,7 +928,7 @@ class Trainer:
         return loss
 
     def validation_step(self, batch, step):
-        if hasattr(self.model, "training_step"):
+        if hasattr(self.model, "validation_step"):
             loss_aux = self.model.validation_step(batch, step)
         elif hasattr(self.model, "step"):
             loss_aux = self.model.step(batch, step)
