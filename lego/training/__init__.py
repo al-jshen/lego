@@ -1327,8 +1327,9 @@ class Trainer:
                     "epoch": epoch + 1,
                     "global_step": self.global_step,
                 }
-                for logger in self.logger:
-                    logger.log(log_dict, step=self.global_step)
+                if self.is_rank_zero:
+                    for logger in self.logger:
+                        logger.log(log_dict, step=self.global_step)
 
         # Ensure all pending async checkpoint operations complete before shutdown
         self.ckpt_manager.cleanup()
