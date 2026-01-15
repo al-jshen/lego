@@ -1305,7 +1305,9 @@ class Trainer:
                     end_time = time.perf_counter()
 
             # checkpoint per epoch
-            if (epoch + 1) % self.ckpt_every_n_epochs == 0:
+            if self.ckpt_every_n_epochs and (
+                (epoch + 1) % self.ckpt_every_n_epochs == 0
+            ):
                 if self.is_rank_zero:
                     print(
                         f"[Rank {self.global_rank}] Saving checkpoint at epoch {epoch + 1}, step {self.global_step}"
@@ -1313,7 +1315,11 @@ class Trainer:
                 self._save_checkpoint(epoch + 1, self.global_step)
 
             # optional validation
-            if self.val_dataset is not None:
+            if (
+                self.val_dataset is not None
+                and self.validate_every_n_epochs
+                and (epoch + 1) % self.validate_every_n_epochs == 0
+            ):
                 if self.val_loader is None:
                     self.val_loader = self._prepare_dataloader(self.val_dataset)
                 self._set_epoch_on_samplers(epoch)
