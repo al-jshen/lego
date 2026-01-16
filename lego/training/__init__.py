@@ -599,6 +599,7 @@ class Trainer:
         reset_steps: bool = False,
         ckpt_every_n_steps: Optional[int] = None,
         ckpt_every_n_epochs: int = 1,
+        validate_every_n_epochs: int = 1,
         async_checkpoint: bool = True,
         activation_checkpointing: Optional[ActivationCheckpointingStrategy] = None,
         logger: Optional[Logger | Iterable[Logger]] = None,
@@ -629,6 +630,7 @@ class Trainer:
             reset_steps=reset_steps,
             ckpt_every_n_steps=ckpt_every_n_steps,
             ckpt_every_n_epochs=ckpt_every_n_epochs,
+            validate_every_n_epochs=validate_every_n_epochs,
             async_checkpoint=async_checkpoint,
             seed=seed,
             activation_checkpointing=activation_checkpointing,
@@ -1105,6 +1107,7 @@ class Trainer:
                         else "Disabled",
                     ),
                     ("Save Every N Epochs", self.ckpt_every_n_epochs),
+                    ("Validate Every N Epochs", self.validate_every_n_epochs),
                 ],
             ),
             (
