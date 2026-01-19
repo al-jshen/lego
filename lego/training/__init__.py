@@ -600,6 +600,7 @@ class Trainer:
         reset_steps: bool = False,
         ckpt_every_n_steps: Optional[int] = None,
         ckpt_every_n_epochs: int = 1,
+        validate_every_n_steps: Optional[int] = None,
         validate_every_n_epochs: int = 1,
         async_checkpoint: bool = True,
         activation_checkpointing: Optional[ActivationCheckpointingStrategy] = None,
@@ -649,6 +650,7 @@ class Trainer:
             reset_steps=reset_steps,
             ckpt_every_n_steps=ckpt_every_n_steps,
             ckpt_every_n_epochs=ckpt_every_n_epochs,
+            validate_every_n_steps=validate_every_n_steps,
             validate_every_n_epochs=validate_every_n_epochs,
             async_checkpoint=async_checkpoint,
             seed=seed,
@@ -1128,6 +1130,10 @@ class Trainer:
                         else "Disabled",
                     ),
                     (
+                        "Validate Every N Steps",
+                        self.validate_every_n_steps if self.val_dataset else "Disabled",
+                    ),
+                    (
                         "Validate Every N Epochs",
                         self.validate_every_n_epochs
                         if self.val_dataset
@@ -1331,6 +1337,29 @@ class Trainer:
 
                 if self.enable_timer:
                     end_time = time.perf_counter()
+
+                # optional validation
+                if (
+                    self.val_dataset is not None
+                    and self.validate_every_n_steps
+                    and self.global_step % self.validate_every_n_steps == 0
+                ):
+                    if self.val_loader is None:
+                        self.val_loader = self._prepare_dataloader(self.val_dataset)
+                    self._set_epoch_on_samplers(epoch)
+                    if self.is_rank_zero:
+                        print(
+                            f"[Rank {self.global_rank}] Validating after step {self.global_step}"
+                        )
+                    val_loss = self.validate()
+                    log_dict = {
+                        "val/loss": val_loss,
+                        "epoch": epoch + 1,
+                        "global_step": self.global_step,
+                    }
+                    if self.is_rank_zero:
+                        for logger in self.logger:
+                            logger.log(log_dict, step=self.global_step)
 
             # checkpoint per epoch
             if self.ckpt_every_n_epochs and (
