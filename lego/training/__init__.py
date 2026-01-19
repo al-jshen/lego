@@ -587,6 +587,7 @@ class Trainer:
         train_dataset: Dataset,
         val_dataset: Optional[Dataset] = None,
         max_epochs: int = 1,
+        max_steps: Optional[int] = None,
         log_every_n_steps: int | Iterable[int] = 50,
         gradient_accumulation_steps: int = 1,
         grad_clip_norm: Optional[float] = None,
@@ -617,8 +618,21 @@ class Trainer:
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
 
+        steps_per_epoch = int(
+            ceil(len(self.train_dataset) / self.batch_size / self.world_size)
+        )
+
+        # figure out how many epochs to train for
+        if max_epochs is not None and max_steps is not None:
+            raise ValueError("Only one of max_epochs or max_steps should be set.")
+        if max_epochs is not None:
+            max_steps = max_epochs * steps_per_epoch
+        elif max_steps is not None:
+            max_epochs = int(ceil(max_steps / steps_per_epoch))
+
         self.cfg = dict(
             max_epochs=max_epochs,
+            max_steps=max_steps,
             log_every_n_steps=log_every_n_steps,
             gradient_accumulation_steps=gradient_accumulation_steps,
             grad_clip_norm=grad_clip_norm,
@@ -1016,6 +1030,7 @@ class Trainer:
                     ("Precision", self.precision),
                     ("Seed", self.seed),
                     ("Max Epochs", self.max_epochs),
+                    ("Max Steps", self.max_steps),
                     ("World Size", self.world_size),
                 ],
             ),
@@ -1030,13 +1045,13 @@ class Trainer:
                         * self.world_size,
                     ),
                     (
-                        "Training steps (no accum)",
+                        "Training steps per epoch (no accum)",
                         f"{int(ceil(len(self.train_dataset) / self.batch_size / self.world_size)):,}"
                         if self.train_dataset
                         else "N/A",
                     ),
                     (
-                        "Val steps (no accum)",
+                        "Val steps per epoch (no accum)",
                         f"{int(ceil(len(self.val_dataset) / self.batch_size / self.world_size)):,}"
                         if self.val_dataset
                         else "N/A",
