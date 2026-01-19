@@ -1121,8 +1121,18 @@ class Trainer:
                         if self.ckpt_every_n_steps
                         else "Disabled",
                     ),
-                    ("Save Every N Epochs", self.ckpt_every_n_epochs),
-                    ("Validate Every N Epochs", self.validate_every_n_epochs),
+                    (
+                        "Save Every N Epochs",
+                        self.ckpt_every_n_epochs
+                        if self.ckpt_every_n_epochs
+                        else "Disabled",
+                    ),
+                    (
+                        "Validate Every N Epochs",
+                        self.validate_every_n_epochs
+                        if self.val_dataset
+                        else "Disabled",
+                    ),
                 ],
             ),
             (
