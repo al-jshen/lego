@@ -614,12 +614,17 @@ class Trainer:
         limit_train_batches: Optional[int] = None,
         limit_val_batches: Optional[int] = None,
     ):
+        self.global_rank = int(os.environ.get("RANK", 0))
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+        self.local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+
         self.model = model
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
 
         steps_per_epoch = int(
-            ceil(len(self.train_dataset) / self.batch_size / self.world_size)
+            ceil(len(self.train_dataset) / batch_size / self.world_size)
         )
 
         # figure out how many epochs to train for
@@ -663,11 +668,6 @@ class Trainer:
 
         if self.seed is not None:
             seed_everything(self.seed)
-
-        self.global_rank = int(os.environ.get("RANK", 0))
-        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
-        self.local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
 
         if torch.cuda.is_available():
             # os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in range(self.local_world_size)])
