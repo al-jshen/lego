@@ -625,7 +625,11 @@ class Trainer:
         self.val_dataset = val_dataset
 
         steps_per_epoch = int(
-            ceil(len(self.train_dataset) / batch_size / self.world_size)
+            ceil(
+                (len(self.train_dataset) - (1 if drop_last else 0))
+                / batch_size
+                / self.world_size
+            )
         )
 
         # figure out how many epochs to train for
