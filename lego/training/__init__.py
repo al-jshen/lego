@@ -1398,6 +1398,13 @@ class Trainer:
                     for logger in self.logger:
                         logger.log(log_dict, step=self.global_step)
 
+        # do one last checkpoint to make sure we have final model saved
+        if self.is_rank_zero:
+            print(
+                f"[Rank {self.global_rank}] Saving final checkpoint at epoch {self.max_epochs}, step {self.global_step}"
+            )
+        self._save_checkpoint(self.max_epochs, self.global_step)
+
         # Ensure all pending async checkpoint operations complete before shutdown
         self.ckpt_manager.cleanup()
 
