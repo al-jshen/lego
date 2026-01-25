@@ -586,6 +586,8 @@ class Trainer:
         optimizer: Optimizer,
         train_dataset: Dataset,
         val_dataset: Optional[Dataset] = None,
+        train_collate_fn: Optional[Callable] = None,
+        val_collate_fn: Optional[Callable] = None,
         max_epochs: int = 1,
         max_steps: Optional[int] = None,
         log_every_n_steps: int | Iterable[int] = 50,
@@ -623,6 +625,8 @@ class Trainer:
         self.model = model
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
+        self.train_collate_fn = train_collate_fn
+        self.val_collate_fn = val_collate_fn
 
         steps_per_epoch = int(
             ceil(
@@ -888,7 +892,9 @@ class Trainer:
             load_path, self.model, self.optimizer, self.scheduler
         )
 
-    def _prepare_dataloader(self, dataset: Optional[Dataset]):
+    def _prepare_dataloader(
+        self, dataset: Optional[Dataset], split: Optional[str] = None
+    ):
         if dataset is None:
             return None
         if self.world_size <= 1:
@@ -902,6 +908,12 @@ class Trainer:
                 drop_last=self.drop_last,
             )
 
+        collate_fn = None
+        if split == "train":
+            collate_fn = self.train_collate_fn
+        elif split == "val":
+            collate_fn = self.val_collate_fn
+
         loader = DataLoader(
             dataset,
             batch_size=self.batch_size,
@@ -910,6 +922,7 @@ class Trainer:
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=self.drop_last,
+            collate_fn=collate_fn,
         )
 
         return loader
@@ -1062,6 +1075,8 @@ class Trainer:
                         if self.val_dataset
                         else "N/A",
                     ),
+                    ("Custom train collate fn", self.train_collate_fn is not None),
+                    ("Custom val collate fn", self.val_collate_fn is not None),
                     ("Num Workers", self.num_workers),
                     ("Pin Memory", self.pin_memory),
                     ("Drop Last", self.drop_last),
@@ -1223,7 +1238,9 @@ class Trainer:
         for epoch in range(self.start_epoch, self.max_epochs):
             self.model.train()
             if self.train_loader is None:
-                self.train_loader = self._prepare_dataloader(self.train_dataset)
+                self.train_loader = self._prepare_dataloader(
+                    self.train_dataset, split="train"
+                )
             self._set_epoch_on_samplers(epoch)
 
             if self.enable_timer:
@@ -1349,7 +1366,9 @@ class Trainer:
                     and self.global_step % self.validate_every_n_steps == 0
                 ):
                     if self.val_loader is None:
-                        self.val_loader = self._prepare_dataloader(self.val_dataset)
+                        self.val_loader = self._prepare_dataloader(
+                            self.val_dataset, split="val"
+                        )
                     self._set_epoch_on_samplers(epoch)
                     if self.is_rank_zero:
                         print(
@@ -1382,7 +1401,9 @@ class Trainer:
                 and (epoch + 1) % self.validate_every_n_epochs == 0
             ):
                 if self.val_loader is None:
-                    self.val_loader = self._prepare_dataloader(self.val_dataset)
+                    self.val_loader = self._prepare_dataloader(
+                        self.val_dataset, split="val"
+                    )
                 self._set_epoch_on_samplers(epoch)
                 if self.is_rank_zero:
                     print(
