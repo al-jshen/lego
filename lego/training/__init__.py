@@ -1,6 +1,6 @@
 import os
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from math import ceil
 from typing import Callable, Iterable, Literal, Optional
 
@@ -959,8 +959,8 @@ class Trainer:
         # if self.is_rank_zero:
         #     self._log("train", loss_aux)
 
-        loss = self.extract_loss(loss_aux)
-        return loss
+        # loss = self.extract_loss(loss_aux)
+        return loss_aux
 
     def validation_step(self, batch, step):
         if hasattr(self.model, "validation_step"):
@@ -975,8 +975,8 @@ class Trainer:
         # if self.is_rank_zero:
         #     self._log("val", loss_aux)
 
-        loss = self.extract_loss(loss_aux)
-        return loss
+        # loss = self.extract_loss(loss_aux)
+        return loss_aux
 
     @property
     def is_rank_zero(self):
@@ -1391,13 +1391,21 @@ class Trainer:
                         print(
                             f"[Rank {self.global_rank}] Validating after step {self.global_step}"
                         )
-                    val_loss = self.validate()
-                    log_dict = {
-                        "val/loss": val_loss,
-                        "epoch": epoch + 1,
-                        "global_step": self.global_step,
-                    }
-                    if self.is_rank_zero:
+                    loss_aux = self.validate()
+
+                    if self.is_rank_zero and self.logger:
+                        if not isinstance(loss_aux, dict):
+                            log_dict = {"val/loss": loss}
+                        else:
+                            log_dict = {f"val/{k}": v for k, v in loss_aux.items()}
+
+                        log_dict.update(
+                            {
+                                "epoch": epoch + 1,
+                                "global_step": self.global_step,
+                            }
+                        )
+
                         for logger in self.logger:
                             logger.log(log_dict, step=self.global_step)
 
@@ -1426,13 +1434,22 @@ class Trainer:
                     print(
                         f"[Rank {self.global_rank}] Validating after epoch {epoch + 1}"
                     )
-                val_loss = self.validate()
-                log_dict = {
-                    "val/loss": val_loss,
-                    "epoch": epoch + 1,
-                    "global_step": self.global_step,
-                }
-                if self.is_rank_zero:
+
+                loss_aux = self.validate()
+
+                if self.is_rank_zero and self.logger:
+                    if not isinstance(loss_aux, dict):
+                        log_dict = {"val/loss": loss}
+                    else:
+                        log_dict = {f"val/{k}": v for k, v in loss_aux.items()}
+
+                    log_dict.update(
+                        {
+                            "epoch": epoch + 1,
+                            "global_step": self.global_step,
+                        }
+                    )
+
                     for logger in self.logger:
                         logger.log(log_dict, step=self.global_step)
 
@@ -1454,7 +1471,7 @@ class Trainer:
     # -------------------------------
     def validate(self):
         self.model.eval()
-        val_loss = 0.0
+        val_loss = defaultdict(float)
         with torch.no_grad(), self.autocast:
             for step, batch in enumerate(self.val_loader):
                 if (
@@ -1464,6 +1481,11 @@ class Trainer:
                     break
                 # transfer to evaluation device
                 batch = to(batch, self.device)
-                loss = self.validation_step(batch, step)
-                val_loss += loss.item()
-        return val_loss / (step + 1)
+                loss_aux = self.validation_step(batch, step)
+                for k, v in loss_aux.items():
+                    val_loss[k] += v.item()
+                # loss = self.extract_loss(loss_aux)
+                # val_loss += loss.item()
+        for k, v in val_loss.items():
+            val_loss[k] = v / (step + 1)
+        return val_loss
