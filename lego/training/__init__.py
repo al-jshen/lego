@@ -506,7 +506,7 @@ class Optimizer:
         schedulers.append(
             optim.lr_scheduler.CosineAnnealingLR(
                 optimizer,
-                T_max=self.scheduler_max_steps,
+                T_max=self.scheduler_max_steps - self.warmup_steps,
                 eta_min=self.min_lr,
             )
             if self.scheduler == "cosine"
@@ -528,7 +528,7 @@ class Optimizer:
         if self.warmup_steps > 0:
             milestones.append(self.warmup_steps)
         if self.scheduler == "cosine":
-            milestones.append(self.warmup_steps + self.scheduler_max_steps)
+            milestones.append(self.scheduler_max_steps)
         if len(milestones) == 0:
             milestones = None
 
