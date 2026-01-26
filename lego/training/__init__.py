@@ -528,7 +528,7 @@ class Optimizer:
         if self.warmup_steps > 0:
             milestones.append(self.warmup_steps)
         if self.scheduler == "cosine":
-            milestones.append(self.scheduler_max_steps)
+            milestones.append(self.warmup_steps + self.scheduler_max_steps)
         if len(milestones) == 0:
             milestones = None
 
