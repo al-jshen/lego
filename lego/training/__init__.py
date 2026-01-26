@@ -1490,8 +1490,11 @@ class Trainer:
                 # transfer to evaluation device
                 batch = to(batch, self.device)
                 loss_aux = self.validation_step(batch, step)
-                for k, v in loss_aux.items():
-                    val_loss[k] += v.item()
+                if not isinstance(loss_aux, dict):
+                    val_loss["loss"] += loss_aux.item()
+                else:
+                    for k, v in loss_aux.items():
+                        val_loss[k] += v.item()
                 # loss = self.extract_loss(loss_aux)
                 # val_loss += loss.item()
         for k, v in val_loss.items():
