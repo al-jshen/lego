@@ -1274,6 +1274,23 @@ class Trainer:
                         loss / self.gradient_accumulation_steps
                     )  # scale loss for accumulation
 
+                    if torch.isnan(loss):
+                        err_msg = f"NaN loss detected at epoch {epoch}, step {step}."
+                        if self.is_rank_zero:
+                            print(err_msg)
+                            # dump last batch of data, and also model state dict
+                            torch.save(
+                                dict(
+                                    batch=batch,
+                                    model_state_dict=self.model.state_dict(),
+                                ),
+                                f"nan-dump-epoch{epoch}-step{step}-rank{self.global_rank}.pt",
+                            )
+                            print(
+                                f"Dumped batch and model state dict to nan-dump-epoch{epoch}-step{step}-rank{self.global_rank}.pt"
+                            )
+                        raise ValueError(err_msg)
+
                 del batch
 
                 with Timer(
