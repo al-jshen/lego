@@ -515,7 +515,13 @@ class Optimizer:
 
         if self.scheduler == "cosine":
             schedulers.append(
-                optim.lr_scheduler.ConstantLR(optimizer, factor=self.min_lr / self.lr)
+                optim.lr_scheduler.ConstantLR(
+                    optimizer,
+                    factor=self.min_lr / self.lr,
+                    total_iters=int(
+                        1e9
+                    ),  # set total_iters to big number, otherwise it reverts back to factor=1 after a bit
+                )
             )
 
         milestones = []
@@ -1335,7 +1341,9 @@ class Trainer:
                                     }
                                     log_dict["train/loss"] = loss
 
-                                lr = self.optimizer.param_groups[0]["lr"]
+                                lr = self.scheduler.get_last_lr()[
+                                    0
+                                ]  # we have two param groups, but they get the same lr
                                 log_dict.update(
                                     {
                                         "lr": lr,
