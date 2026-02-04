@@ -22,7 +22,7 @@ def precompute_freqs_cis(seq_len: int, n_elem: int, base: int = 10000, cls_token
         [torch.zeros(cls_token_num, n_elem // 2, 2), cache]
     )  # (cls_token_num+seq_len, head_dim // 2, 2)
     return cond_cache
-    
+
 
 class RotaryEmbedding(torch.nn.Module):
     """From https://github.com/pytorch/torchtitan/blob/main/torchtitan/models/llama/model.py"""
@@ -183,8 +183,7 @@ class Attention(nn.Module):
             keys,
             values,
             attn_mask=mask,
-            is_causal=self.causal
-            and mask is None,  # is_causal=False is for KV cache
+            is_causal=self.causal and mask is None,  # is_causal=False is for KV cache
             dropout_p=self.attn_dropout_p if self.training else 0,
         )
 
@@ -202,7 +201,7 @@ class TransformerBlock(nn.Module):
         n_kv_head: Optional[int] = None,
         attn_dropout_p: float = 0.0,
         resid_dropout_p: float = 0.0,
-        ffn_dim_multiplier: Optional[float] = None,
+        ffn_hidden_dim: Optional[float] = None,
         ffn_dropout_p: float = 0.0,
         norm_eps: float = 1e-5,
         multiple_of: int = 256,
@@ -220,9 +219,8 @@ class TransformerBlock(nn.Module):
         )
         self.feed_forward = FeedForward(
             dim=dim,
-            ffn_dim_multiplier=ffn_dim_multiplier,
-            ffn_dropout_p=ffn_dropout_p,
-            multiple_of=multiple_of,
+            hidden_dim=ffn_hidden_dim,
+            dropout=ffn_dropout_p,
         )
         self.attention_norm = RMSNorm(dim, eps=norm_eps)
         self.ffn_norm = RMSNorm(dim, eps=norm_eps)

@@ -150,22 +150,19 @@ class FeedForward(nn.Module):
     def __init__(
         self,
         dim: int = 4096,
-        ffn_dim_multiplier: Optional[float] = None,
-        ffn_dropout_p: float = 0.1,
-        multiple_of: int = 256,
+        hidden_dim: Optional[int] = None,
+        dropout: float = 0.0,
     ):
         super().__init__()
-        hidden_dim = 4 * dim
-        hidden_dim = int(2 * hidden_dim / 3)
-        # custom dim factor multiplier
-        if ffn_dim_multiplier is not None:
-            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-        hidden_dim = find_multiple(hidden_dim, multiple_of)
+        hidden_dim = hidden_dim or (2 / 3 * 4 * dim)
 
         self.w13 = nn.Linear(dim, 2 * hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
-        self.ffn_dropout = nn.Dropout(ffn_dropout_p)
+        self.dropout_p = dropout
 
     def forward(self, x):
         x1, x3 = torch.chunk(self.w13(x), 2, dim=-1)
-        return self.ffn_dropout(self.w2(F.silu(x1) * x3))
+        x = self.w2(F.silu(x1) * x3)
+        if self.dropout_p > 0.0:
+            x = F.dropout(x, p=self.dropout_p, training=self.training)
+        return x
