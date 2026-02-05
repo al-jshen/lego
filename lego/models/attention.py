@@ -208,7 +208,7 @@ class TransformerBlock(nn.Module):
         drop_path: float = 0.0,
         causal: bool = True,
         # moe
-        n_routed_experts: int = 8,  # set to 0 or 1 for standard FFN
+        n_routed_experts: int = 0,  # set to 0 or 1 for standard FFN
         n_activated_experts: int = 2,
         moe_inter_dim: int = 64,
         n_shared_experts: int = 1,
