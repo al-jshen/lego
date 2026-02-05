@@ -45,7 +45,9 @@ class AdaLayerNorm(nn.Module):
     ) -> Float[torch.Tensor, "b ... c"]:
         c = x.shape[-1]
         num_spatial_dims = len(x.shape) - 2
-        assert c == self.input_dim, f"input_dim must match the last dimension of x, got {c} != {self.input_dim}"
+        assert c == self.input_dim, (
+            f"input_dim must match the last dimension of x, got {c} != {self.input_dim}"
+        )
 
         cond = self.cond_proj(cond)[:, *((None,) * num_spatial_dims), :]
         scale, shift = cond.chunk(2, dim=-1)
@@ -94,7 +96,9 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.scale = nn.Parameter(torch.ones(input_dim))
 
-    def forward(self, x: Float[torch.Tensor, "b ... c"]) -> Float[torch.Tensor, "b ... c"]:
+    def forward(
+        self, x: Float[torch.Tensor, "b ... c"]
+    ) -> Float[torch.Tensor, "b ... c"]:
         return rms_norm(x, self.scale, self.eps)
 
 
@@ -156,7 +160,8 @@ class RevIN(nn.Module):
         std, mean = torch.std_mean(x, axis=rest, keepdim=True)
         n_rest = len(rest)
         return (
-            ((x - mean) / std) * self.expand_back(self.norm_scale, n_rest) + self.expand_back(self.norm_shift, n_rest),
+            ((x - mean) / std) * self.expand_back(self.norm_scale, n_rest)
+            + self.expand_back(self.norm_shift, n_rest),
             mean,
             std,
         )
@@ -166,9 +171,13 @@ class RevIN(nn.Module):
 
     def unnormalize(self, x, mean, std):
         n_rest = len(x.shape) - 2
-        x = (x - self.expand_back(self.norm_shift, n_rest)) / self.expand_back(self.norm_scale, n_rest)
+        x = (x - self.expand_back(self.norm_shift, n_rest)) / self.expand_back(
+            self.norm_scale, n_rest
+        )
         x = x * std + mean
-        x = x * self.expand_back(self.unnorm_scale, n_rest) + self.expand_back(self.unnorm_shift, n_rest)
+        x = x * self.expand_back(self.unnorm_scale, n_rest) + self.expand_back(
+            self.unnorm_shift, n_rest
+        )
         return x
 
     def expand_back(self, x, num_dims):

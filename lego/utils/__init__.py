@@ -6,13 +6,13 @@ from contextlib import contextmanager
 from functools import reduce
 from typing import Iterable, Optional, Set, Tuple, Type
 
-import wandb
 import hydra
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from einops import rearrange
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
@@ -47,7 +47,9 @@ class Timer:
         if self.cuda:
             self.end_time.record()
             torch.cuda.synchronize()
-            elapsed = self.start_time.elapsed_time(self.end_time) / 1000.0  # Convert to seconds
+            elapsed = (
+                self.start_time.elapsed_time(self.end_time) / 1000.0
+            )  # Convert to seconds
         else:
             elapsed = time.perf_counter() - self.start_time
 
@@ -94,7 +96,11 @@ def convert_to_regular_types(obj):
     """Convert Hydra configs and other special types to regular Python
     types."""
     if isinstance(obj, (ListConfig, DictConfig)):
-        return {k: convert_to_regular_types(v) for k, v in obj.items()} if isinstance(obj, DictConfig) else list(obj)
+        return (
+            {k: convert_to_regular_types(v) for k, v in obj.items()}
+            if isinstance(obj, DictConfig)
+            else list(obj)
+        )
     elif isinstance(obj, (list, tuple)):
         return [convert_to_regular_types(x) for x in obj]
     elif isinstance(obj, dict):
@@ -132,7 +138,10 @@ class CompilePolicy:
 
 
 def module_wrap_policy(
-    module: nn.Module, recurse: bool, nonwrapped_numel: int, module_classes: Iterable[type[nn.Module]]
+    module: nn.Module,
+    recurse: bool,
+    nonwrapped_numel: int,
+    module_classes: Iterable[type[nn.Module]],
 ) -> bool:
     return isinstance(module, tuple(module_classes))
 
@@ -148,7 +157,9 @@ def uncompile(model):
     anything that is torch._dynamo.eval_frame.OptimizedModule and has _orig_mod
     attribute, replace it with the _orig_mod."""
     for name, module in model.named_children():
-        if isinstance(module, torch._dynamo.eval_frame.OptimizedModule) and hasattr(module, "_orig_mod"):
+        if isinstance(module, torch._dynamo.eval_frame.OptimizedModule) and hasattr(
+            module, "_orig_mod"
+        ):
             setattr(model, name, module._orig_mod)
         uncompile(module)
     return model
@@ -248,7 +259,9 @@ def on_channel_first(fn, x, *args, **kwargs):
 
 def dropout_nd(x, p=0.5, training=True, inplace=False):
     """N-dimensional dropout."""
-    return getattr(F, f"dropout{x.ndim - 1}d")(x, p, training, inplace)  # -1 for batch dim
+    return getattr(F, f"dropout{x.ndim - 1}d")(
+        x, p, training, inplace
+    )  # -1 for batch dim
 
 
 def to(x, *args, **kwargs):
@@ -256,7 +269,9 @@ def to(x, *args, **kwargs):
 
     Takes the same arguments as `torch.Tensor.to`.
     """
-    return torch.utils._pytree.tree_map(lambda t: t.to(*args, **kwargs) if isinstance(t, torch.Tensor) else t, x)
+    return torch.utils._pytree.tree_map(
+        lambda t: t.to(*args, **kwargs) if isinstance(t, torch.Tensor) else t, x
+    )
 
 
 def np_to_torch(x, *args, **kwargs):
@@ -265,13 +280,18 @@ def np_to_torch(x, *args, **kwargs):
     Takes the same arguments as `torch.Tensor.to`.
     """
     return torch.utils._pytree.tree_map(
-        lambda t: torch.from_numpy(t).to(*args, **kwargs) if isinstance(t, np.ndarray) else t, x
+        lambda t: torch.from_numpy(t).to(*args, **kwargs)
+        if isinstance(t, np.ndarray)
+        else t,
+        x,
     )
 
 
 def torch_to_np(x):
     """Convert torch tensors to numpy arrays in nested structures."""
-    return torch.utils._pytree.tree_map(lambda t: t.cpu().numpy() if isinstance(t, torch.Tensor) else t, x)
+    return torch.utils._pytree.tree_map(
+        lambda t: t.cpu().numpy() if isinstance(t, torch.Tensor) else t, x
+    )
 
 
 def get_wandb_run(run_path: str):
@@ -282,7 +302,9 @@ def get_wandb_run(run_path: str):
     return run
 
 
-def load_from_wandb(run_path: str, extra_config: dict = {}, try_load_checkpoint: bool = True) -> dict:
+def load_from_wandb(
+    run_path: str, extra_config: dict = {}, try_load_checkpoint: bool = True
+) -> dict:
     """Load a config from W&B run."""
 
     run = get_wandb_run(run_path)
@@ -295,9 +317,17 @@ def load_from_wandb(run_path: str, extra_config: dict = {}, try_load_checkpoint:
     if try_load_checkpoint:
         try:
             ckpt_path = os.path.join(
-                config["trainer"]["logger"]["save_dir"], run.project, run.id, "checkpoints", "last.ckpt"
+                config["trainer"]["logger"]["save_dir"],
+                run.project,
+                run.id,
+                "checkpoints",
+                "last.ckpt",
             )
-            ckpt = torch.load(ckpt_path, map_location=instantiated_config.model.device, weights_only=False)
+            ckpt = torch.load(
+                ckpt_path,
+                map_location=instantiated_config.model.device,
+                weights_only=False,
+            )
             instantiated_config.model.load_state_dict(ckpt["state_dict"], strict=False)
             print("Loaded checkpoint successfully!")
         except Exception as e:
@@ -390,19 +420,27 @@ def collate_incomplete(list_of_dicts):
             collated[k].append(d.get(k, None))
     for k, v in collated.items():
         if any(isinstance(i, torch.Tensor) for i in v):
-            assert not any(i is None for i in v), "Cannot collate tensors with None values."
+            assert not any(i is None for i in v), (
+                "Cannot collate tensors with None values."
+            )
             collated[k] = torch.stack(v, dim=0)
         elif any(isinstance(i, np.ndarray) for i in v):
-            assert not any(i is None for i in v), "Cannot collate numpy arrays with None values."
+            assert not any(i is None for i in v), (
+                "Cannot collate numpy arrays with None values."
+            )
             try:
                 collated[k] = np.stack(v, axis=0)
             except ValueError as e:
                 # print shapes
                 shapes = [i.shape for i in v if isinstance(i, np.ndarray)]
-                raise ValueError(f"Cannot stack numpy arrays for key {k} with different shapes: {shapes}") from e
+                raise ValueError(
+                    f"Cannot stack numpy arrays for key {k} with different shapes: {shapes}"
+                ) from e
         elif all(i is None for i in v):
             collated[k] = None
-        elif any(isinstance(i, (np.floating, np.integer)) for i in v) and not any(i is None for i in v):
+        elif any(isinstance(i, (np.floating, np.integer)) for i in v) and not any(
+            i is None for i in v
+        ):
             collated[k] = np.array(collated[k])
         else:
             pass
@@ -411,6 +449,9 @@ def collate_incomplete(list_of_dicts):
 
 
 def module_wrap_policy(
-    module: nn.Module, recurse: bool, nonwrapped_numel: int, module_classes: Iterable[type[nn.Module]]
+    module: nn.Module,
+    recurse: bool,
+    nonwrapped_numel: int,
+    module_classes: Iterable[type[nn.Module]],
 ) -> bool:
     return isinstance(module, tuple(module_classes))

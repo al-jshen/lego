@@ -3,12 +3,11 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from torchdiffeq import odeint, odeint_adjoint
-
-from lego.models.norm import MaybeAdaLayerNorm
-from lego.models.modules import MLP
 from lego.models.embedding import TimestepEmbedder
+from lego.models.modules import MLP
+from lego.models.norm import MaybeAdaLayerNorm
 from lego.utils import linear_init
+from torchdiffeq import odeint, odeint_adjoint
 
 
 def autograd_trace(outputs, inputs):
@@ -286,7 +285,9 @@ class MLPBackbone(nn.Module):
         self.num_layers = num_layers
         self.act = getattr(nn, activation)()
         self.in_proj = nn.Linear(input_dim, embed_dim)
-        self.adanorms = nn.ModuleList([MaybeAdaLayerNorm(embed_dim, cond_dim) for _ in range(num_layers)])
+        self.adanorms = nn.ModuleList(
+            [MaybeAdaLayerNorm(embed_dim, cond_dim) for _ in range(num_layers)]
+        )
         self.blocks = nn.ModuleList(
             [
                 MLP(
