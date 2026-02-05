@@ -46,7 +46,7 @@ class Gate(nn.Module):
         self.topk_groups = n_limited_groups
         self.score_func = score_func
         self.route_scale = route_scale
-        self.weight = nn.Parameter(torch.empty(n_routed_experts, dim))
+        self.weight = nn.Parameter(torch.randn(n_routed_experts, dim) / (dim**0.5))
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
