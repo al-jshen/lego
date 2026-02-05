@@ -1,0 +1,77 @@
+trainer:
+  _target_: lego.training.Trainer
+  model:
+    _target_: XXX
+  optimizer:
+    _target_: lego.training.Optimizer
+    lr: 1e-4
+    min_lr: 1e-7
+    betas: [0.9, 0.95]
+    weight_decay: 0.1
+    scheduler: cosine
+    scheduler_max_steps: 10000
+    warmup_steps: 1000
+  train_dataset:
+    _target_: XXX
+  train_collate_fn:
+    _target_: XXX
+  val_dataset:
+    _target_: XXX
+  val_collate_fn:
+    _target_: XXX
+  max_steps: 15000
+  max_epochs: null
+  log_every_n_steps: [50, 10]
+  gradient_accumulation_steps: 1
+  grad_clip_norm: 1.0
+  precision: bf16
+  strategy:
+    _target_: lego.training.FSDPStrategy
+    sharding_strategy: no_shard
+    cpu_offload: false
+    reshard_after_forward: false # false = zero2, true = zero3
+    mixed_precision_policy:
+      _target_: torch.distributed.fsdp.MixedPrecisionPolicy
+      param_dtype:
+        _target_: hydra.utils.get_object
+        path: torch.bfloat16
+      reduce_dtype:
+        _target_: hydra.utils.get_object
+        path: torch.float32
+    modules_to_wrap:
+      - _target_: hydra.utils.get_class
+        path: lego.models.attention.TransformerBlock
+  compile: false
+  ckpt_save_dir: XXX
+  ckpt_load_dir: null
+  reset_steps: true
+  ckpt_every_n_steps: XXX
+  ckpt_every_n_epochs: null
+  validate_every_n_steps: XXX
+  validate_every_n_epochs: null
+  async_checkpoint: true
+  activation_checkpointing: null
+    # _target_: lego.training.ActivationCheckpointingStrategy
+    # modules:
+    #   - _target_: hydra.utils.get_class
+    #     path: lego.models.attention.TransformerBlock
+    # reentrant: false
+  logger:
+    - _target_: lego.training.WandbLogger
+      entity: j_shen
+      project: XXX
+      dir: /mnt/home/jshen/ceph/programs/XXX/outputs
+      group: XXX
+      notes: null
+      save_code: true
+    - _target_: lego.training.CommandLineLogger
+      log_format: compact
+  drop_last: false
+  shuffle: true
+  pin_memory: true
+  batch_size: 256
+  num_workers: 8
+  seed: 0
+  enable_timer: false
+  limit_train_batches: null
+  limit_val_batches: null
