@@ -1,14 +1,10 @@
 from typing import Tuple
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .modules import FeedForward
-
-world_size = 1
-rank = 0
 
 
 class Gate(nn.Module):
@@ -93,7 +89,6 @@ class MoE(nn.Module):
     Attributes:
         dim (int): Dimensionality of input features.
         n_routed_experts (int): Total number of experts in the model.
-        n_local_experts (int): Number of experts handled locally in distributed systems.
         n_activated_experts (int): Number of experts activated for each input.
         gate (nn.Module): Gating mechanism to route inputs to experts.
         experts (nn.ModuleList): List of expert modules.
@@ -117,14 +112,8 @@ class MoE(nn.Module):
         """
         super().__init__()
         self.dim = dim
-        assert n_routed_experts % world_size == 0, (
-            f"Number of experts must be divisible by world size (world_size={world_size})"
-        )
         self.n_routed_experts = n_routed_experts
-        self.n_local_experts = n_routed_experts // world_size
         self.n_activated_experts = n_activated_experts
-        self.experts_start_idx = rank * self.n_local_experts
-        self.experts_end_idx = self.experts_start_idx + self.n_local_experts
         self.moe_inter_dim = moe_inter_dim
         self.n_shared_experts = n_shared_experts
         self.n_expert_groups = n_expert_groups
@@ -143,8 +132,6 @@ class MoE(nn.Module):
         self.experts = nn.ModuleList(
             [
                 FeedForward(self.dim, hidden_dim=moe_inter_dim)
-                if self.experts_start_idx <= i < self.experts_end_idx
-                else None
                 for i in range(self.n_routed_experts)
             ]
         )
@@ -169,13 +156,11 @@ class MoE(nn.Module):
         counts = torch.bincount(
             indices.flatten(), minlength=self.n_routed_experts
         ).tolist()
-        for i in range(self.experts_start_idx, self.experts_end_idx):
+        for i in range(self.n_routed_experts):
             if counts[i] == 0:
                 continue
             expert = self.experts[i]
             idx, top = torch.where(indices == i)
             y[idx] += expert(x[idx]) * weights[idx, top, None]
         z = self.shared_experts(x)
-        if world_size > 1:
-            dist.all_reduce(y)
         return (y + z).view(shape)
