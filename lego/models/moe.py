@@ -18,9 +18,9 @@ class Gate(nn.Module):
 
     def __init__(
         self,
-        dim: int = 2048,
-        n_activated_experts: int = 6,
-        n_routed_experts: int = 64,
+        dim: int = 64,
+        n_activated_experts: int = 2,
+        n_routed_experts: int = 8,
         n_expert_groups: int = 1,
         n_limited_groups: int = 1,
         score_func: str = "softmax",
@@ -102,10 +102,10 @@ class MoE(nn.Module):
 
     def __init__(
         self,
-        dim: int = 2048,
+        dim: int = 64,
         n_routed_experts: int = 8,
         n_activated_experts: int = 2,
-        moe_inter_dim: int = 1024,
+        moe_inter_dim: int = 64,
         n_shared_experts: int = 2,
         n_expert_groups: int = 1,
         n_limited_groups: int = 1,
