@@ -9,7 +9,7 @@ from .moe import MoE
 from .norm import RMSNorm
 
 
-def precompute_freqs_cis(seq_len: int, n_elem: int, base: int = 10000, cls_token_num=1):
+def precompute_freqs_cis(seq_len: int, n_elem: int, base: int = 10000, cls_token_num=0):
     freqs = 1.0 / (
         base ** (torch.arange(0, n_elem, 2)[: (n_elem // 2)].float() / n_elem)
     )

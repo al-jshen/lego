@@ -1,7 +1,8 @@
-import torch
-import torch.nn as nn
 import math
 from functools import lru_cache
+
+import torch
+import torch.nn as nn
 from lego.models.modules import MLP
 
 
