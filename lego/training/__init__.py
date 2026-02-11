@@ -778,6 +778,8 @@ class Trainer:
             if not self.reset_steps:
                 self.start_epoch = epoch
                 self.global_step = step
+            else:
+                self.optimizer, self.scheduler = self.base_optimizer.setup(self.model)
             if (
                 not (dist.is_available() and dist.is_initialized())
                 or dist.get_rank() == 0
