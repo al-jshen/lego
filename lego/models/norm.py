@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from jaxtyping import Float
 
-from ..utils import linear_init, on_channel_first, zero_init
+from ..utils import on_channel_first, zero_init
 
 
 class CF(nn.Module):
@@ -36,7 +36,9 @@ class AdaLayerNorm(nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.embedding_dim = embedding_dim
-        self.cond_proj = zero_init(nn.Linear(embedding_dim, input_dim * 2))
+        self.cond_proj = nn.Sequential(
+            nn.SiLU(), zero_init(nn.Linear(embedding_dim, input_dim * 2))
+        )
 
     def forward(
         self,
@@ -83,6 +85,51 @@ class MaybeAdaLayerNorm(nn.Module):
             return self.norm(x)
 
 
+class AdaLayerNormZero(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        embedding_dim: int,
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+
+        # We now project to 3 * input_dim (scale, shift, gate)
+        # It is crucial that this linear layer is initialized to zero
+        self.cond_proj = nn.Sequential(
+            nn.SiLU(), zero_init(nn.Linear(embedding_dim, input_dim * 3))
+        )
+
+        self.norm = nn.LayerNorm(input_dim, elementwise_affine=False, eps=1e-6)
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, "b ... c"],
+        cond: Float[torch.Tensor, "b d"],
+    ) -> tuple[Float[torch.Tensor, "b ... c"], Float[torch.Tensor, "b ... c"]]:
+        """
+        Returns:
+            modulated_x: The normalized and scaled/shifted input.
+            gate: The gating parameter to be applied after the residual transformations.
+        """
+        # Shape handling for spatial dimensions (e.g., [B, H, W, C] or [B, L, C])
+        num_spatial_dims = x.ndim - 2
+
+        # Project conditioning signal and split into scale, shift, and gate
+        # Output shape: [B, 1, ..., 3*C]
+        emb = self.cond_proj(cond)[:, *((None,) * num_spatial_dims), :]
+        scale, shift, gate = emb.chunk(3, dim=-1)
+
+        # Apply standard LayerNorm (no learnable affine params here, handled by scale/shift)
+        x = self.norm(x)
+
+        # Apply modulation: (1 + scale) * x + shift
+        # Adding 1 to scale ensures that if scale is 0 (at init), we multiply by 1
+        x = x * (1 + scale) + shift
+
+        return x, gate
+
+
 def rms_norm(x, scale, eps):
     dtype = torch.promote_types(x.dtype, torch.float32)
     mean_sq = torch.mean(x.to(dtype) ** 2, dim=-1, keepdim=True)
@@ -94,19 +141,21 @@ class RMSNorm(nn.Module):
     def __init__(self, input_dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
-        self.scale = nn.Parameter(torch.ones(input_dim))
+        self.scale = nn.Parameter(torch.zeros(input_dim))
 
     def forward(
         self, x: Float[torch.Tensor, "b ... c"]
     ) -> Float[torch.Tensor, "b ... c"]:
-        return rms_norm(x, self.scale, self.eps)
+        return rms_norm(x, 1 + self.scale, self.eps)
 
 
 class AdaRMSNorm(nn.Module):
     def __init__(self, input_dim: int, embedding_dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
-        self.linear = linear_init(nn.Linear(embedding_dim, input_dim, bias=False))
+        self.linear = nn.Sequential(
+            nn.SiLU(), zero_init(nn.Linear(embedding_dim, input_dim, bias=False))
+        )
 
     def forward(
         self, x: Float[torch.Tensor, "b ... c"], cond: Float[torch.Tensor, "b d"]
