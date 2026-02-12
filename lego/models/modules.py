@@ -154,7 +154,7 @@ class FeedForward(nn.Module):
         dropout: float = 0.0,
     ):
         super().__init__()
-        hidden_dim = hidden_dim or (2 / 3 * 4 * dim)
+        hidden_dim = hidden_dim or (4 * dim)
 
         self.w13 = nn.Linear(dim, 2 * hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
