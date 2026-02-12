@@ -190,6 +190,38 @@ class MaybeAdaRMSNorm(nn.Module):
             return self.norm(x)
 
 
+class AdaRMSNormZero(nn.Module):
+    def __init__(self, input_dim: int, embedding_dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.input_dim = input_dim
+        self.eps = eps
+
+        # Project to 2 * input_dim (1 for scale, 1 for gate)
+        self.linear = nn.Sequential(
+            nn.SiLU(), zero_init(nn.Linear(embedding_dim, input_dim * 2, bias=False))
+        )
+
+    def forward(
+        self, x: Float[torch.Tensor, "b ... c"], cond: Float[torch.Tensor, "b d"]
+    ) -> tuple[Float[torch.Tensor, "b ... c"], Float[torch.Tensor, "b ... c"]]:
+        """
+        Returns:
+            modulated_x: The RMS-normalized and scaled input.
+            gate: The gating parameter for the residual branch.
+        """
+        num_spatial_dims = x.ndim - 2
+
+        # Project and split into scale and gate
+        emb = self.linear(cond)[:, *((None,) * num_spatial_dims), :]
+        scale, gate = emb.chunk(2, dim=-1)
+
+        # Modulation scale: (1 + 0) = 1 at initialization
+        # RMSNorm already handles the division by the root mean square
+        x = rms_norm(x, (1.0 + scale), self.eps)
+
+        return x, gate
+
+
 class RevIN(nn.Module):
     """
     Affine reversible instance norm.
