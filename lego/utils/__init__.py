@@ -172,8 +172,10 @@ def tuplefy(x: Iterable):
     return x
 
 
-def nparams(model):
-    return sum([p.numel() for p in model.parameters()])
+def nparams(model, trainable_only=False):
+    return sum(
+        [p.numel() for p in model.parameters() if not trainable_only or p.requires_grad]
+    )
 
 
 def patchify(x, patch_size):
