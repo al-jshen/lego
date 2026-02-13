@@ -158,8 +158,9 @@ class Attention(nn.Module):
         xq = self.qnorm(xq)
         xk = self.knorm(xk)
 
-        xq = apply_rotary_emb(xq, freqs_cis)
-        xk = apply_rotary_emb(xk, freqs_cis)
+        if freqs_cis is not None:
+            xq = apply_rotary_emb(xq, freqs_cis)
+            xk = apply_rotary_emb(xk, freqs_cis)
 
         xq, xk, xv = map(lambda x: x.transpose(1, 2), (xq, xk, xv))
 
