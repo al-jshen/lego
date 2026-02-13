@@ -124,7 +124,6 @@ class RectifiedFlow(nn.Module):
 
         return ode_func
 
-    @torch.no_grad()
     def sample(
         self,
         sample_shape,
