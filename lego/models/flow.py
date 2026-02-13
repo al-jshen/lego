@@ -3,10 +3,6 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from lego.models.embedding import TimestepEmbedder
-from lego.models.modules import MLP
-from lego.models.norm import MaybeAdaLayerNorm
-from lego.utils import linear_init
 from torchdiffeq import odeint, odeint_adjoint
 
 
@@ -50,10 +46,16 @@ class ODEFnWrapper(nn.Module):
 
 
 class RectifiedFlow(nn.Module):
-    def __init__(self, time_schedule: nn.Module, score_model: nn.Module):
+    def __init__(
+        self,
+        time_schedule: nn.Module,
+        score_model: nn.Module,
+        conditioner: Optional[nn.Module] = None,
+    ):
         super().__init__()
         self.time_schedule = time_schedule
         self.score_model = score_model
+        self.conditioner = conditioner if conditioner is not None else lambda x: None
         self.register_buffer("base_mu", torch.tensor(0.0))
         self.register_buffer("base_sigma", torch.tensor(1))
         self.base_dist = torch.distributions.Normal
@@ -71,6 +73,7 @@ class RectifiedFlow(nn.Module):
         )  # sum over all data dims (not batch)
 
     def loss(self, target_samples, context=None):
+        context = self.conditioner(context)
         base_samples = self.sample_base(target_samples.shape)  # b c ...
         times = self.time_schedule(target_samples.shape[0]).to(base_samples)
         expand_dims = (1,) * (target_samples.ndim - 1)
@@ -86,11 +89,17 @@ class RectifiedFlow(nn.Module):
     def step(self, batch, batch_idx=None, **kwargs):
         if len(batch) == 2:
             x, context = batch
-            return self.loss(x, context).mean()
+            return self.loss(x, self.conditioner(context)).mean()
         # otherwise, just one element (unconditional)
         return self.loss(batch).mean()
 
-    def make_ode_fn(self, context, cfg_w, null_context=None):
+    def make_ode_fn(self, context, cfg_w):
+        if context is not None:
+            context = self.conditioner(context)
+            null_context = torch.zeros_like(context)
+        else:
+            null_context = None
+
         def ode_func(t, yt):
             t = torch.full((yt.shape[0],), t.item(), device=yt.device, dtype=yt.dtype)
             if cfg_w == 0.0:  # unconditional model
@@ -120,7 +129,6 @@ class RectifiedFlow(nn.Module):
         self,
         sample_shape,
         context: Optional[torch.Tensor] = None,
-        null_context: Optional[torch.Tensor] = None,
         temperature: float = 1.0,
         atol=1e-5,
         rtol=1e-5,
@@ -136,8 +144,10 @@ class RectifiedFlow(nn.Module):
         """
 
         inputs = self.sample_base(sample_shape, temperature=temperature)
+        if context is not None:
+            context = self.conditioner(context)
 
-        _ode_fn = self.make_ode_fn(context, cfg_w, null_context=null_context)
+        _ode_fn = self.make_ode_fn(context, cfg_w)
 
         integrator = odeint_adjoint if adjoint else odeint
 
@@ -220,8 +230,9 @@ class RectifiedFlow(nn.Module):
         """
 
         noise = torch.randn_like(inputs)
+        context = self.conditioner(context)
 
-        _ode_fn = self.make_ode_fn(context, cfg_w, null_context=null_context)
+        _ode_fn = self.make_ode_fn(context, cfg_w)
 
         integrator = odeint_adjoint if adjoint else odeint
 
@@ -265,61 +276,3 @@ class RectifiedFlow(nn.Module):
 
         log_prob = self.log_prob_base(out)
         return log_prob + delta_logp
-
-
-class MLPBackbone(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        cond_dim: int = 0,
-        embed_dim: int = 256,
-        hidden_dim: int = 1024,
-        num_layers: int = 16,
-        activation="SiLU",
-        dropout: float = 0.0,
-    ):
-        super().__init__()
-        self.input_dim = input_dim
-        self.cond_dim = cond_dim
-        self.embed_dim = embed_dim
-        self.num_layers = num_layers
-        self.act = getattr(nn, activation)()
-        self.in_proj = nn.Linear(input_dim, embed_dim)
-        self.adanorms = nn.ModuleList(
-            [MaybeAdaLayerNorm(embed_dim, cond_dim) for _ in range(num_layers)]
-        )
-        self.blocks = nn.ModuleList(
-            [
-                MLP(
-                    input_dim=embed_dim,
-                    output_dim=embed_dim,
-                    hidden_dim=hidden_dim,
-                    dropout=dropout,
-                    activation=self.act,
-                )
-                for _ in range(num_layers)
-            ]
-        )
-        self.out_proj = nn.Linear(embed_dim, input_dim)
-        self.temb = TimestepEmbedder(hidden_dim=hidden_dim, embedding_dim=embed_dim)
-
-        self.apply(self.init_weights)
-        nn.init.constant_(self.out_proj.weight, 0.0)
-
-    def init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            linear_init(m)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-
-    def forward(self, x, t, context=None):
-        temb = self.temb(t)
-        x = self.in_proj(x)
-        for norm, block in zip(self.adanorms, self.blocks):
-            shortcut = x
-            x = norm(x, context)
-            x = block(x + temb)
-            x = x + shortcut
-        x = self.out_proj(x)
-        return x
