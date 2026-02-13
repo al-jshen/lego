@@ -50,12 +50,12 @@ class RectifiedFlow(nn.Module):
         self,
         time_schedule: nn.Module,
         score_model: nn.Module,
-        conditioner: Optional[nn.Module] = None,
+        conditioner: nn.Module,
     ):
         super().__init__()
         self.time_schedule = time_schedule
         self.score_model = score_model
-        self.conditioner = conditioner if conditioner is not None else lambda x: None
+        self.conditioner = conditioner
         self.register_buffer("base_mu", torch.tensor(0.0))
         self.register_buffer("base_sigma", torch.tensor(1))
         self.base_dist = torch.distributions.Normal
