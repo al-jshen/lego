@@ -89,7 +89,7 @@ class RectifiedFlow(nn.Module):
     def step(self, batch, batch_idx=None, **kwargs):
         if len(batch) == 2:
             x, context = batch
-            return self.loss(x, self.conditioner(context)).mean()
+            return self.loss(x, context).mean()
         # otherwise, just one element (unconditional)
         return self.loss(batch).mean()
 
