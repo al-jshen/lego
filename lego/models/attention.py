@@ -126,7 +126,8 @@ class Attention(nn.Module):
         total_kv_dim = (self.n_head + 2 * self.n_kv_head) * self.head_dim
 
         # key, query, value projections for all heads, but in a batch
-        self.wqkv = nn.Linear(dim, total_kv_dim, bias=False)
+        self.wq = nn.Linear(dim, self.n_head * self.head_dim, bias=False)
+        self.wkv = nn.Linear(dim, 2 * self.n_kv_head * self.head_dim, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
         self.kv_cache = None
 
@@ -144,10 +145,11 @@ class Attention(nn.Module):
         freqs_cis: torch.Tensor = None,
         input_pos: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
+        kv: Optional[torch.Tensor] = None,
     ):
         bsz, seqlen, _ = x.shape
-        kv_size = self.n_kv_head * self.head_dim
-        xq, xk, xv = self.wqkv(x).split([self.dim, kv_size, kv_size], dim=-1)
+        xq = self.wq(x)
+        xk, xv = self.wkv(x).chunk(2, dim=-1)
 
         xq = xq.view(bsz, seqlen, self.n_head, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_kv_head, self.head_dim)
