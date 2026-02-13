@@ -3,7 +3,6 @@ from functools import lru_cache
 
 import torch
 import torch.nn as nn
-from lego.models.modules import MLP
 
 
 class TimestepEmbedder(nn.Module):
@@ -13,8 +12,10 @@ class TimestepEmbedder(nn.Module):
 
     def __init__(self, hidden_dim, embedding_dim=256):
         super().__init__()
-        self.mlp = MLP(
-            input_dim=embedding_dim, output_dim=embedding_dim, hidden_dim=hidden_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
         )
         self.embedding_dim = embedding_dim
 
