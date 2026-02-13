@@ -144,8 +144,6 @@ class RectifiedFlow(nn.Module):
         """
 
         inputs = self.sample_base(sample_shape, temperature=temperature)
-        if context is not None:
-            context = self.conditioner(context)
 
         _ode_fn = self.make_ode_fn(context, cfg_w)
 
@@ -230,7 +228,6 @@ class RectifiedFlow(nn.Module):
         """
 
         noise = torch.randn_like(inputs)
-        context = self.conditioner(context)
 
         _ode_fn = self.make_ode_fn(context, cfg_w)
 
