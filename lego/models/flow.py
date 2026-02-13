@@ -51,11 +51,13 @@ class RectifiedFlow(nn.Module):
         time_schedule: nn.Module,
         score_model: nn.Module,
         conditioner: nn.Module,
+        conditioner_dropout_p: float = 0.1,
     ):
         super().__init__()
         self.time_schedule = time_schedule
         self.score_model = score_model
         self.conditioner = conditioner
+        self.conditioner_dropout = nn.Dropout(conditioner_dropout_p, inplace=True)
         self.register_buffer("base_mu", torch.tensor(0.0))
         self.register_buffer("base_sigma", torch.tensor(1))
         self.base_dist = torch.distributions.Normal
@@ -72,14 +74,24 @@ class RectifiedFlow(nn.Module):
             .sum(axis=list(range(1, inputs.ndim)))
         )  # sum over all data dims (not batch)
 
+    def forward_score_model(self, x, t, context=None):
+        return self.score_model(x, t, context=context)
+    
+        # x prediction, v loss
+        # t_expanded = t.view(-1, *([1] * (x.ndim - 1)))
+        # x_pred = self.score_model(x, t, context=context)  # x + v = x_pred
+        # v_pred = (x_pred - x) / torch.clip(1 - t_expanded, min=0.05)
+        # return v_pred
+
     def loss(self, target_samples, context=None):
         context = self.conditioner(context)
+        context = self.conditioner_dropout(context)
         base_samples = self.sample_base(target_samples.shape)  # b c ...
         times = self.time_schedule(target_samples.shape[0]).to(base_samples)
         expand_dims = (1,) * (target_samples.ndim - 1)
         times_expanded = times.view(-1, *expand_dims)
         inputs = times_expanded * target_samples + (1.0 - times_expanded) * base_samples
-        velocity = self.score_model(inputs, times, context=context)
+        velocity = self.forward_score_model(inputs, times, context=context)
         target = target_samples - base_samples
         loss = torch.mean(
             (target - velocity) ** 2, dim=tuple(range(1, base_samples.ndim))
@@ -104,9 +116,9 @@ class RectifiedFlow(nn.Module):
             t = torch.full((yt.shape[0],), t.item(), device=yt.device, dtype=yt.dtype)
             if cfg_w == 0.0:  # unconditional model
                 assert null_context is not None
-                v = self.score_model(yt, t, context=null_context)
+                v = self.forward_score_model(yt, t, context=null_context)
             elif cfg_w == 1.0:  # conditional model
-                v = self.score_model(yt, t, context=context)
+                v = self.forward_score_model(yt, t, context=context)
             else:  # combination of conditional and unconditional
                 assert null_context is not None
                 batched_context = torch.cat([null_context, context], dim=0)
@@ -114,7 +126,7 @@ class RectifiedFlow(nn.Module):
                 yt = torch.cat([yt, yt], dim=0)
                 t = torch.cat([t, t], dim=0)
                 # batched forward
-                v = self.score_model(yt, t, context=batched_context)
+                v = self.forward_score_model(yt, t, context=batched_context)
                 # split and combine
                 v_uncond, v_cond = torch.split(
                     v, [context.shape[0], context.shape[0]], dim=0
