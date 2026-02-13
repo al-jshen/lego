@@ -457,3 +457,13 @@ def module_wrap_policy(
     module_classes: Iterable[type[nn.Module]],
 ) -> bool:
     return isinstance(module, tuple(module_classes))
+
+
+def freeze(model):
+    for p in model.parameters():
+        p.requires_grad = False
+
+def unfreeze(model):
+    for p in model.parameters():
+        p.requires_grad = True
+
