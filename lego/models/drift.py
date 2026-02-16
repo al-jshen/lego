@@ -72,10 +72,8 @@ def compute_V(
 
 def compute_drifting_loss(
     x_gen: torch.Tensor,
-    # labels_gen: torch.Tensor,
     x_pos: torch.Tensor,
-    # labels_pos: torch.Tensor,
-    feature_encoder: Optional[nn.Module],
+    feature_encoder: Optional[nn.Module] = None,
     temperatures: list = [0.02, 0.05, 0.2],
     use_pixel_space: bool = True,
 ):
