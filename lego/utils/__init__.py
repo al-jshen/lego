@@ -468,3 +468,9 @@ def unfreeze(model):
     for p in model.parameters():
         p.requires_grad = True
     return model
+
+
+def find_multiple(n: int, k: int):
+    if n % k == 0:
+        return n
+    return n + k - (n % k)

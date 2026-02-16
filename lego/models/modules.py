@@ -140,12 +140,6 @@ class DropoutDim(nn.Module):
         return x * mask
 
 
-def find_multiple(n: int, k: int):
-    if n % k == 0:
-        return n
-    return n + k - (n % k)
-
-
 class FeedForward(nn.Module):
     def __init__(
         self,
