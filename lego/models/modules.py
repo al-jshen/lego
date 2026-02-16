@@ -111,6 +111,34 @@ class GRN(nn.Module):
         return self.gamma * (x * Nx) + self.beta + x
 
 
+def dropout_dim(x, p=0.5, axis=(-1,), training=True, inplace=False):
+    """
+    Custom dropout that zeros out slices along specified dimensions.
+
+    Args:
+        x (torch.Tensor): Input tensor
+        p (float): Probability of an element being zeroed out.
+        axis (int or tuple of ints): Dimension(s) along which to apply dropout.
+        training (bool): If True, applies dropout (based on training mode).
+        inplace (bool): If True, does the operation in-place.
+    
+    Returns:
+        torch.Tensor: Output tensor with dropout applied
+    """
+    if not training or p == 0:
+        return x
+
+    dim = (axis,) if isinstance(axis, int) else axis
+    
+    mask_shape = list(x.shape)
+    for d in dim:
+        mask_shape[d] = 1  # Create dropout mask along these dimensions
+
+    mask = torch.ones(mask_shape, device=x.device, dtype=x.dtype)
+    mask = F.dropout(mask, p=p, training=True, inplace=inplace)
+
+    return x * mask
+
 class DropoutDim(nn.Module):
     def __init__(self, p=0.5, axis=(-1,), inplace=False):
         """
