@@ -76,7 +76,7 @@ class RectifiedFlow(nn.Module):
 
     def forward_score_model(self, x, t, context=None):
         return self.score_model(x, t, context=context)
-    
+
         # x prediction, v loss
         # t_expanded = t.view(-1, *([1] * (x.ndim - 1)))
         # x_pred = self.score_model(x, t, context=context)  # x + v = x_pred
