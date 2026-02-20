@@ -24,10 +24,17 @@ class ContinuousGPT(nn.Module):
     Any domain-specific preprocessing (patchification, spatial folding into batch,
     etc.) should happen externally before passing data to this model.
 
+    Supports optional conditioning via prefix vectors prepended to the sequence.
+    Conditioning vectors must be pre-projected to the model's hidden dimension
+    (``dim``). They participate in causal self-attention as context for the data
+    tokens but are stripped from the output.
+
     Examples:
       - Next-patch image generation: [B, N, C*pH*pW]  (N patches per image)
       - Video with spatial patch folding: [B*nph*npw, T, C*psh*psw]
       - Video with whole-frame tokens: [B, T, C*H*W]
+      - Class-conditional: cond [B, 1, dim] from nn.Embedding + linear proj
+      - Image-conditional: cond [B, N_img, dim] from a vision encoder + linear proj
 
     Args:
         flow: Flow model (e.g. RectifiedFlow) used as the output head.
@@ -135,25 +142,39 @@ class ContinuousGPT(nn.Module):
     def forward(
         self,
         idx: torch.Tensor,
+        cond: Optional[torch.Tensor] = None,
         input_pos: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
     ):
         """
         Args:
             idx: [B, S, ...] input tokens. Trailing dims are flattened to token_dim.
-            input_pos: Optional position indices for KV-cached inference.
+            cond: Optional [B, N_cond, dim] conditioning vectors prepended to the
+                sequence. Must already be projected to the model's hidden dimension.
+            input_pos: Optional position indices for KV-cached inference. When
+                ``cond`` is provided, must cover both conditioning and data
+                positions (length ``N_cond + S``).
             mask: Optional attention mask (auto-built from causal_mask when using KV cache).
 
         Returns:
-            [B, S, output_dim] conditioning vectors for the flow model.
+            [B, S, output_dim] conditioning vectors for the flow model
+            (prefix conditioning tokens are stripped from the output).
         """
         b, s = idx.shape[:2]
         x = idx.reshape(b, s, -1)
         x = self.tok_embeddings(x)
 
+        n_cond = 0
+        if cond is not None:
+            n_cond = cond.shape[1]
+            x = torch.cat([cond, x], dim=1)
+
         self.freqs_cis = self.freqs_cis.to(x.device)
+        total_s = n_cond + s
         freqs_cis = (
-            self.freqs_cis[:s] if input_pos is None else self.freqs_cis[input_pos]
+            self.freqs_cis[:total_s]
+            if input_pos is None
+            else self.freqs_cis[input_pos]
         )
 
         if input_pos is not None:
@@ -165,14 +186,26 @@ class ContinuousGPT(nn.Module):
 
         x = self.norm(x)
         x = self.output_proj(x)
+
+        if n_cond > 0:
+            x = x[:, n_cond:]
+
         return x
 
     # ---- Training ----
 
     def step(self, batch, batch_idx=None, **kwargs):
-        x = batch  # [B, S, ...]
+        """
+        Args:
+            batch: Either a single tensor [B, S, ...] or a tuple of
+                (sequence [B, S, ...], cond [B, N_cond, dim]).
+        """
+        if isinstance(batch, (tuple, list)) and len(batch) == 2:
+            x, cond = batch
+        else:
+            x, cond = batch, None
         x_in, x_out = x[:, :-1], x[:, 1:]
-        conditioner = self(idx=x_in)
+        conditioner = self(idx=x_in, cond=cond)
         x_out = rearrange(x_out, "b s ... -> (b s) ...")
         conditioner = rearrange(conditioner, "b s ... -> (b s) ...")
         loss = self.flow.step((x_out, conditioner))
@@ -193,42 +226,43 @@ class ContinuousGPT(nn.Module):
         return samples.unsqueeze(1)  # [B, 1, *token_shape]
 
     @torch.no_grad()
-    def generate_nocache(self, idx, max_new_tokens, **kwargs):
+    def generate_nocache(self, idx, max_new_tokens, cond=None, **kwargs):
         """Autoregressive generation without KV caching (recomputes full context each step)."""
         self.clear_caches()
         token_shape = idx.shape[2:]
         for _ in tqdm(range(max_new_tokens)):
-            cond = self(idx)
-            samp = self._sample_flow(cond, token_shape=token_shape, **kwargs)
+            out = self(idx, cond=cond)
+            samp = self._sample_flow(out, token_shape=token_shape, **kwargs)
             idx = torch.cat((idx, samp), dim=1)
         return idx
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, **kwargs):
+    def generate(self, idx, max_new_tokens, cond=None, **kwargs):
         """Autoregressive generation with KV caching (prefill + incremental decode)."""
         b, t = idx.shape[:2]
         token_shape = idx.shape[2:]
         device = idx.device
+        n_cond = cond.shape[1] if cond is not None else 0
 
         self.clear_caches()
         with torch.device(device):
             self.setup_caches(
                 max_batch_size=b,
-                max_seq_length=t + max_new_tokens,
+                max_seq_length=n_cond + t + max_new_tokens,
                 dtype=self.tok_embeddings.weight.dtype,
             )
 
-        # prefill: process the entire prompt at once
-        input_pos = torch.arange(t, device=device, dtype=torch.int)
-        cond = self(idx, input_pos=input_pos)
-        samp = self._sample_flow(cond, token_shape=token_shape, **kwargs)
+        # prefill: conditioning tokens (if any) + prompt
+        input_pos = torch.arange(n_cond + t, device=device, dtype=torch.int)
+        out = self(idx, cond=cond, input_pos=input_pos)
+        samp = self._sample_flow(out, token_shape=token_shape, **kwargs)
         idx = torch.cat((idx, samp), dim=1)
 
-        # incremental decode: one token at a time using cached KV
-        input_pos = torch.tensor([t], device=device, dtype=torch.int)
+        # incremental decode: cond is already in the KV cache
+        input_pos = torch.tensor([n_cond + t], device=device, dtype=torch.int)
         for _ in tqdm(range(max_new_tokens - 1)):
-            cond = self(samp, input_pos=input_pos)
-            samp = self._sample_flow(cond, token_shape=token_shape, **kwargs)
+            out = self(samp, input_pos=input_pos)
+            samp = self._sample_flow(out, token_shape=token_shape, **kwargs)
             idx = torch.cat((idx, samp), dim=1)
             input_pos += 1
 
