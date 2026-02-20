@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .modules import DropPath, FeedForward
-from .moe import MoE
 from .norm import RMSNorm
 
 
@@ -209,15 +208,6 @@ class TransformerBlock(nn.Module):
         norm_eps: float = 1e-5,
         drop_path: float = 0.0,
         causal: bool = True,
-        # moe
-        n_routed_experts: int = 0,  # set to 0 or 1 for standard FFN
-        n_activated_experts: int = 2,
-        moe_inter_dim: int = 64,
-        n_shared_experts: int = 1,
-        n_expert_groups: int = 1,
-        n_limited_groups: int = 1,
-        score_func: str = "softmax",
-        route_scale: float = 1.0,
     ):
         super().__init__()
         self.attention = Attention(
@@ -228,24 +218,10 @@ class TransformerBlock(nn.Module):
             resid_dropout_p=resid_dropout_p,
             causal=causal,
         )
-        self.feed_forward = (
-            FeedForward(
-                dim=dim,
-                hidden_dim=ffn_hidden_dim,
-                dropout=ffn_dropout_p,
-            )
-            if n_routed_experts <= 1
-            else MoE(
-                dim=dim,
-                n_routed_experts=n_routed_experts,
-                n_activated_experts=n_activated_experts,
-                moe_inter_dim=moe_inter_dim,
-                n_shared_experts=n_shared_experts,
-                n_expert_groups=n_expert_groups,
-                n_limited_groups=n_limited_groups,
-                score_func=score_func,
-                route_scale=route_scale,
-            )
+        self.feed_forward = FeedForward(
+            dim=dim,
+            hidden_dim=ffn_hidden_dim,
+            dropout=ffn_dropout_p,
         )
         self.attention_norm = RMSNorm(dim, eps=norm_eps)
         self.ffn_norm = RMSNorm(dim, eps=norm_eps)

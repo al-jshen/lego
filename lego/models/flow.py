@@ -148,10 +148,13 @@ class RectifiedFlow(nn.Module):
         # otherwise, just one element (unconditional)
         return self.loss(batch).mean()
 
-    def make_ode_fn(self, context, cfg_w):
+    def make_ode_fn(self, context, cfg_w, null_context=None):
         if context is not None:
             context = self.conditioner(context)
-            null_context = torch.zeros_like(context)
+            if null_context is not None:
+                null_context = self.conditioner(null_context)
+            else:
+                null_context = torch.zeros_like(context)
         else:
             null_context = None
 
@@ -183,6 +186,7 @@ class RectifiedFlow(nn.Module):
         self,
         sample_shape,
         context: Optional[torch.Tensor] = None,
+        null_context: Optional[torch.Tensor] = None,
         temperature: float = 1.0,
         atol=1e-5,
         rtol=1e-5,
@@ -195,11 +199,18 @@ class RectifiedFlow(nn.Module):
         """Sample from the flow. First draw from the base distribution, and then
         send the samples through the score model to get the velocity. Integrate
         the velocity to get the resulting samples.
+
+        Args:
+            null_context: Explicit unconditional context for CFG. If provided,
+                used instead of the default zeros. This allows the caller to
+                supply the transformer's output when run without external
+                conditioning, so CFG interpolates between the true conditional
+                and unconditional velocity fields.
         """
 
         inputs = self.sample_base(sample_shape, temperature=temperature)
 
-        _ode_fn = self.make_ode_fn(context, cfg_w)
+        _ode_fn = self.make_ode_fn(context, cfg_w, null_context=null_context)
 
         integrator = odeint_adjoint if adjoint else odeint
 
