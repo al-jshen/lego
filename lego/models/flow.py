@@ -51,16 +51,16 @@ class ODEFnWrapper(nn.Module):
 class MLPBackboneBlock(nn.Module):
     """MLP denoising backbone block for a token-level model"""
 
-    def __init__(self, data_dim, cond_dim, hidden_dim=None):
+    def __init__(self, embed_dim, cond_dim, hidden_dim=None):
         super().__init__()
-        self.data_dim = data_dim
+        self.embed_dim = embed_dim
         self.cond_dim = cond_dim
-        self.hidden_dim = hidden_dim if hidden_dim is not None else data_dim * 2
+        self.hidden_dim = hidden_dim if hidden_dim is not None else embed_dim * 2
 
-        self.adaln = AdaLayerNormZero(data_dim, cond_dim)
-        self.linear1 = nn.Linear(data_dim, self.hidden_dim)
+        self.adaln = AdaLayerNormZero(embed_dim, cond_dim)
+        self.linear1 = nn.Linear(embed_dim, self.hidden_dim)
         self.activation = nn.SiLU()
-        self.linear2 = nn.Linear(self.hidden_dim, data_dim)
+        self.linear2 = nn.Linear(self.hidden_dim, embed_dim)
 
     def forward(self, x, t, context=None):
         out, gate = self.adaln(x, context)  # input dim, gate is for residual connection
@@ -71,20 +71,24 @@ class MLPBackboneBlock(nn.Module):
 class MLPBackbone(nn.Module):
     """MLP denoising backbone for a token-level model"""
 
-    def __init__(self, data_dim, cond_dim, hidden_dim=None, num_blocks=3):
+    def __init__(self, data_dim, embed_dim, cond_dim, hidden_dim=None, num_blocks=3):
         super().__init__()
+        self.embed = nn.Linear(data_dim, embed_dim)
         self.blocks = nn.ModuleList(
             [
-                MLPBackboneBlock(data_dim, cond_dim, hidden_dim)
+                MLPBackboneBlock(embed_dim, cond_dim, hidden_dim)
                 for _ in range(num_blocks)
             ]
         )
         self.temb = TimestepEmbedding(cond_dim)
+        self.debed = nn.Linear(embed_dim, data_dim)
 
     def forward(self, x, t, context=None):
         ctx = self.temb(t) + context  # mix time and context
+        x = self.embed(x)
         for block in self.blocks:
             x = block(x, t, context=ctx)
+        x = self.debed(x)
         return x
 
 
