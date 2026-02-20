@@ -5,6 +5,9 @@ import torch
 import torch.nn as nn
 from torchdiffeq import odeint, odeint_adjoint
 
+from .embedding import TimestepEmbedding
+from .norm import AdaLayerNormZero
+
 
 def autograd_trace(outputs, inputs):
     trJ = 0.0
@@ -45,6 +48,46 @@ class ODEFnWrapper(nn.Module):
         return self.ode_func(*args, **kwargs)
 
 
+class MLPBackboneBlock(nn.Module):
+    """MLP denoising backbone block for a token-level model"""
+
+    def __init__(self, input_dim, hidden_dim=None, output_dim=None):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim or input_dim * 2
+        self.output_dim = output_dim or input_dim
+        self.temb = TimestepEmbedding(input_dim)
+
+        self.adaln = AdaLayerNormZero(input_dim, input_dim)
+        self.linear1 = nn.Linear(input_dim, hidden_dim)
+        self.activation = nn.SiLU()
+        self.linear2 = nn.Linear(hidden_dim, self.output_dim)
+
+    def forward(self, x, t, context=None):
+        ctx = self.temb(t) + context  # mix time and context
+        out, gate = self.adaln(x, ctx)  # input dim, gate is for residual connection
+        out = self.linear2(self.activation(self.linear1(out)))
+        return out * gate + x
+
+
+class MLPBackbone(nn.Module):
+    """MLP denoising backbone for a token-level model"""
+
+    def __init__(self, input_dim, hidden_dim=None, output_dim=None, num_blocks=4):
+        super().__init__()
+        self.blocks = nn.ModuleList(
+            [
+                MLPBackboneBlock(input_dim, hidden_dim, output_dim)
+                for _ in range(num_blocks)
+            ]
+        )
+
+    def forward(self, x, t, context=None):
+        for block in self.blocks:
+            x = block(x, t, context=context)
+        return x
+
+
 class RectifiedFlow(nn.Module):
     def __init__(
         self,
@@ -76,7 +119,7 @@ class RectifiedFlow(nn.Module):
 
     def forward_score_model(self, x, t, context=None):
         return self.score_model(x, t, context=context)
-    
+
         # x prediction, v loss
         # t_expanded = t.view(-1, *([1] * (x.ndim - 1)))
         # x_pred = self.score_model(x, t, context=context)  # x + v = x_pred
