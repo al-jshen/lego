@@ -1,0 +1,235 @@
+import math
+from typing import List, Optional
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from einops import rearrange
+from tqdm.auto import tqdm
+
+from .attention import KVCache, TransformerBlock, precompute_freqs_cis
+from .norm import RMSNorm
+from ..utils import find_multiple
+
+
+class ContinuousGPT(nn.Module):
+    """
+    Continuous-valued causal transformer with a flow model output head.
+
+    Operates on generic sequential data of shape [B, S, ...] where:
+      - B is the batch dimension
+      - S is the sequence dimension (autoregressive axis)
+      - ... is the token shape (flattened internally to token_dim for embedding)
+
+    Any domain-specific preprocessing (patchification, spatial folding into batch,
+    etc.) should happen externally before passing data to this model.
+
+    Examples:
+      - Next-patch image generation: [B, N, C*pH*pW]  (N patches per image)
+      - Video with spatial patch folding: [B*nph*npw, T, C*psh*psw]
+      - Video with whole-frame tokens: [B, T, C*H*W]
+
+    Args:
+        flow: Flow model (e.g. RectifiedFlow) used as the output head.
+        token_dim: Flat dimension of each input token (prod of trailing dims).
+        dim: Hidden dimension of the transformer.
+        output_dim: Dimension of the output projection. Defaults to dim.
+            This is what the flow receives as conditioning.
+    """
+
+    def __init__(
+        self,
+        flow: nn.Module,
+        token_dim: int,
+        dim: int = 4096,
+        output_dim: Optional[int] = None,
+        n_layer: int = 32,
+        n_head: int = 32,
+        n_kv_head: Optional[int] = None,
+        ffn_hidden_dim: Optional[int] = None,
+        rope_base: float = 10000,
+        norm_eps: float = 1e-5,
+        initializer_range: float = 0.02,
+        attn_dropout_p: float = 0.0,
+        resid_dropout_p: float = 0.1,
+        ffn_dropout_p: float = 0.1,
+        drop_path_rate: float = 0.0,
+        block_size: int = 256,
+    ):
+        super().__init__()
+        self.n_head = n_head
+        self.dim = dim
+        self.output_dim = output_dim or dim
+        self.token_dim = token_dim
+        self.rope_base = rope_base
+        self.initializer_range = initializer_range
+        self.n_layer = n_layer
+        self.block_size = block_size
+
+        self.tok_embeddings = nn.Linear(token_dim, dim, bias=False)
+        self.output_proj = nn.Linear(dim, self.output_dim, bias=False)
+
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, n_layer)]
+        self.layers = nn.ModuleList(
+            TransformerBlock(
+                dim=dim,
+                n_head=n_head,
+                n_kv_head=n_kv_head,
+                attn_dropout_p=attn_dropout_p,
+                resid_dropout_p=resid_dropout_p,
+                ffn_hidden_dim=ffn_hidden_dim,
+                ffn_dropout_p=ffn_dropout_p,
+                norm_eps=norm_eps,
+                drop_path=dpr[i],
+            )
+            for i in range(n_layer)
+        )
+
+        self.norm = RMSNorm(dim, eps=norm_eps)
+        self.flow = flow
+
+        self.freqs_cis = precompute_freqs_cis(
+            self.block_size, dim // n_head, self.rope_base, 0
+        )
+
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+            module.weight.data.normal_(mean=0.0, std=self.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+
+    # ---- KV Cache Management ----
+
+    def setup_caches(self, max_batch_size, max_seq_length, dtype):
+        head_dim = self.dim // self.n_head
+        max_seq_length = find_multiple(max_seq_length, 8)
+        for layer in self.layers:
+            layer.attention.kv_cache = KVCache(
+                max_batch_size,
+                max_seq_length,
+                layer.attention.n_kv_head,
+                head_dim,
+                dtype,
+            )
+
+        causal_mask = torch.tril(
+            torch.ones(max_seq_length, max_seq_length, dtype=torch.bool)
+        )
+        self.causal_mask = causal_mask.unsqueeze(0)
+
+        self.freqs_cis = precompute_freqs_cis(
+            self.block_size, self.dim // self.n_head, self.rope_base, 0
+        )
+
+    def clear_caches(self):
+        for layer in self.layers:
+            layer.attention.kv_cache = None
+
+    # ---- Forward ----
+
+    def forward(
+        self,
+        idx: torch.Tensor,
+        input_pos: Optional[torch.Tensor] = None,
+        mask: Optional[torch.Tensor] = None,
+    ):
+        """
+        Args:
+            idx: [B, S, ...] input tokens. Trailing dims are flattened to token_dim.
+            input_pos: Optional position indices for KV-cached inference.
+            mask: Optional attention mask (auto-built from causal_mask when using KV cache).
+
+        Returns:
+            [B, S, output_dim] conditioning vectors for the flow model.
+        """
+        b, s = idx.shape[:2]
+        x = idx.reshape(b, s, -1)
+        x = self.tok_embeddings(x)
+
+        self.freqs_cis = self.freqs_cis.to(x.device)
+        freqs_cis = (
+            self.freqs_cis[:s] if input_pos is None else self.freqs_cis[input_pos]
+        )
+
+        if input_pos is not None:
+            causal_mask = self.causal_mask.to(x.device).expand(b, -1, -1)
+            mask = causal_mask[:, None, input_pos]
+
+        for layer in self.layers:
+            x = layer(x, freqs_cis, input_pos, mask)
+
+        x = self.norm(x)
+        x = self.output_proj(x)
+        return x
+
+    # ---- Training ----
+
+    def step(self, batch, batch_idx=None, **kwargs):
+        x = batch  # [B, S, ...]
+        x_in, x_out = x[:, :-1], x[:, 1:]
+        conditioner = self(idx=x_in)
+        x_out = rearrange(x_out, "b s ... -> (b s) ...")
+        conditioner = rearrange(conditioner, "b s ... -> (b s) ...")
+        loss = self.flow.step((x_out, conditioner))
+        return loss
+
+    # ---- Inference ----
+
+    def _sample_flow(self, conditioner, token_shape, cfg_scale=1.0, **kwargs):
+        """Sample next token from the flow, conditioned on the last sequence position."""
+        last_cond = conditioner[:, -1]  # [B, output_dim]
+        b = last_cond.shape[0]
+        samples, _ = self.flow.sample(
+            (b, *token_shape),
+            context=last_cond,
+            cfg_w=cfg_scale,
+            **kwargs,
+        )
+        return samples.unsqueeze(1)  # [B, 1, *token_shape]
+
+    @torch.no_grad()
+    def generate_nocache(self, idx, max_new_tokens, **kwargs):
+        """Autoregressive generation without KV caching (recomputes full context each step)."""
+        self.clear_caches()
+        token_shape = idx.shape[2:]
+        for _ in tqdm(range(max_new_tokens)):
+            cond = self(idx)
+            samp = self._sample_flow(cond, token_shape=token_shape, **kwargs)
+            idx = torch.cat((idx, samp), dim=1)
+        return idx
+
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens, **kwargs):
+        """Autoregressive generation with KV caching (prefill + incremental decode)."""
+        b, t = idx.shape[:2]
+        token_shape = idx.shape[2:]
+        device = idx.device
+
+        self.clear_caches()
+        with torch.device(device):
+            self.setup_caches(
+                max_batch_size=b,
+                max_seq_length=t + max_new_tokens,
+                dtype=self.tok_embeddings.weight.dtype,
+            )
+
+        # prefill: process the entire prompt at once
+        input_pos = torch.arange(t, device=device, dtype=torch.int)
+        cond = self(idx, input_pos=input_pos)
+        samp = self._sample_flow(cond, token_shape=token_shape, **kwargs)
+        idx = torch.cat((idx, samp), dim=1)
+
+        # incremental decode: one token at a time using cached KV
+        input_pos = torch.tensor([t], device=device, dtype=torch.int)
+        for _ in tqdm(range(max_new_tokens - 1)):
+            cond = self(samp, input_pos=input_pos)
+            samp = self._sample_flow(cond, token_shape=token_shape, **kwargs)
+            idx = torch.cat((idx, samp), dim=1)
+            input_pos += 1
+
+        return idx
