@@ -61,6 +61,7 @@ class ContinuousGPT(nn.Module):
         resid_dropout_p: float = 0.1,
         ffn_dropout_p: float = 0.1,
         drop_path_rate: float = 0.0,
+        cond_dropout_p: float = 0.0,
         block_size: int = 256,
     ):
         super().__init__()
@@ -71,6 +72,7 @@ class ContinuousGPT(nn.Module):
         self.rope_base = rope_base
         self.initializer_range = initializer_range
         self.n_layer = n_layer
+        self.cond_dropout_p = cond_dropout_p
         self.block_size = block_size
 
         self.tok_embeddings = nn.Linear(token_dim, dim, bias=False)
@@ -199,11 +201,20 @@ class ContinuousGPT(nn.Module):
         Args:
             batch: Either a single tensor [B, S, ...] or a tuple of
                 (sequence [B, S, ...], cond [B, N_cond, dim]).
+
+        During training, per-sample conditioning dropout is applied: each
+        sample's conditioning is independently zeroed with probability
+        ``cond_dropout_p``, teaching the model an unconditional mode for CFG.
         """
         if isinstance(batch, (tuple, list)) and len(batch) == 2:
             x, cond = batch
         else:
             x, cond = batch, None
+
+        if cond is not None and self.training and self.cond_dropout_p > 0:
+            keep = (torch.rand(x.shape[0], 1, 1, device=cond.device) >= self.cond_dropout_p).to(cond.dtype)
+            cond = cond * keep
+
         x_in, x_out = x[:, :-1], x[:, 1:]
         conditioner = self(idx=x_in, cond=cond)
         x_out = rearrange(x_out, "b s ... -> (b s) ...")
@@ -213,56 +224,113 @@ class ContinuousGPT(nn.Module):
 
     # ---- Inference ----
 
-    def _sample_flow(self, conditioner, token_shape, cfg_scale=1.0, **kwargs):
-        """Sample next token from the flow, conditioned on the last sequence position."""
+    def _sample_flow(self, conditioner, token_shape, uncond_conditioner=None, cfg_scale=1.0, **kwargs):
+        """Sample next token from the flow, conditioned on the last sequence position.
+
+        Args:
+            conditioner: [B, S, output_dim] conditional transformer output.
+            uncond_conditioner: Optional [B, S, output_dim] unconditional
+                transformer output (from running without external cond).
+                Passed to the flow as ``null_context`` for CFG.
+        """
         last_cond = conditioner[:, -1]  # [B, output_dim]
+        last_uncond = uncond_conditioner[:, -1] if uncond_conditioner is not None else None
         b = last_cond.shape[0]
         samples, _ = self.flow.sample(
             (b, *token_shape),
             context=last_cond,
+            null_context=last_uncond,
             cfg_w=cfg_scale,
             **kwargs,
         )
         return samples.unsqueeze(1)  # [B, 1, *token_shape]
 
     @torch.no_grad()
-    def generate_nocache(self, idx, max_new_tokens, cond=None, **kwargs):
+    def generate_nocache(self, idx, max_new_tokens, cond=None, cfg_scale=1.0, **kwargs):
         """Autoregressive generation without KV caching (recomputes full context each step)."""
         self.clear_caches()
         token_shape = idx.shape[2:]
+        null_cond = torch.zeros_like(cond) if cond is not None else None
         for _ in tqdm(range(max_new_tokens)):
-            out = self(idx, cond=cond)
-            samp = self._sample_flow(out, token_shape=token_shape, **kwargs)
+            cond_out = self(idx, cond=cond)
+            if null_cond is not None and cfg_scale != 1.0:
+                uncond_out = self(idx, cond=null_cond)
+            else:
+                uncond_out = None
+            samp = self._sample_flow(
+                cond_out, uncond_conditioner=uncond_out,
+                token_shape=token_shape, cfg_scale=cfg_scale, **kwargs,
+            )
             idx = torch.cat((idx, samp), dim=1)
         return idx
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, cond=None, **kwargs):
-        """Autoregressive generation with KV caching (prefill + incremental decode)."""
+    def generate(self, idx, max_new_tokens, cond=None, cfg_scale=1.0, **kwargs):
+        """Autoregressive generation with KV caching (prefill + incremental decode).
+
+        When ``cfg_scale != 1.0`` and ``cond`` is provided, the batch is
+        doubled internally: the first half runs with zeroed conditioning
+        (unconditional) and the second half with real conditioning, sharing a
+        single KV cache for efficiency.
+        """
         b, t = idx.shape[:2]
         token_shape = idx.shape[2:]
         device = idx.device
         n_cond = cond.shape[1] if cond is not None else 0
+        use_cfg = cfg_scale != 1.0 and cond is not None
+
+        if use_cfg:
+            idx_batched = idx.repeat(2, *([1] * (idx.ndim - 1)))
+            cond_batched = torch.cat([torch.zeros_like(cond), cond], dim=0)
+            effective_b = 2 * b
+        else:
+            idx_batched = idx
+            cond_batched = cond
+            effective_b = b
 
         self.clear_caches()
         with torch.device(device):
             self.setup_caches(
-                max_batch_size=b,
+                max_batch_size=effective_b,
                 max_seq_length=n_cond + t + max_new_tokens,
                 dtype=self.tok_embeddings.weight.dtype,
             )
 
         # prefill: conditioning tokens (if any) + prompt
         input_pos = torch.arange(n_cond + t, device=device, dtype=torch.int)
-        out = self(idx, cond=cond, input_pos=input_pos)
-        samp = self._sample_flow(out, token_shape=token_shape, **kwargs)
+        out = self(idx_batched, cond=cond_batched, input_pos=input_pos)
+
+        if use_cfg:
+            uncond_out, cond_out = out.chunk(2, dim=0)
+            samp = self._sample_flow(
+                cond_out, uncond_conditioner=uncond_out,
+                token_shape=token_shape, cfg_scale=cfg_scale, **kwargs,
+            )
+            samp_batched = samp.repeat(2, *([1] * (samp.ndim - 1)))
+        else:
+            samp = self._sample_flow(
+                out, token_shape=token_shape, cfg_scale=cfg_scale, **kwargs,
+            )
+            samp_batched = samp
+
         idx = torch.cat((idx, samp), dim=1)
 
         # incremental decode: cond is already in the KV cache
         input_pos = torch.tensor([n_cond + t], device=device, dtype=torch.int)
         for _ in tqdm(range(max_new_tokens - 1)):
-            out = self(samp, input_pos=input_pos)
-            samp = self._sample_flow(out, token_shape=token_shape, **kwargs)
+            out = self(samp_batched, input_pos=input_pos)
+            if use_cfg:
+                uncond_out, cond_out = out.chunk(2, dim=0)
+                samp = self._sample_flow(
+                    cond_out, uncond_conditioner=uncond_out,
+                    token_shape=token_shape, cfg_scale=cfg_scale, **kwargs,
+                )
+                samp_batched = samp.repeat(2, *([1] * (samp.ndim - 1)))
+            else:
+                samp = self._sample_flow(
+                    out, token_shape=token_shape, cfg_scale=cfg_scale, **kwargs,
+                )
+                samp_batched = samp
             idx = torch.cat((idx, samp), dim=1)
             input_pos += 1
 
