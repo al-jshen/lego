@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 
-class TimestepEmbedder(nn.Module):
+class TimestepEmbedding(nn.Module):
     """
     Embeds scalar timesteps using sinusoidal embeddings and an MLP.
     """
