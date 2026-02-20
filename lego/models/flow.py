@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from torchdiffeq import odeint, odeint_adjoint
 
+from ..utils import default_init
 from .embedding import TimestepEmbedding
 from .norm import AdaLayerNormZero
 
@@ -62,6 +63,8 @@ class MLPBackboneBlock(nn.Module):
         self.activation = nn.SiLU()
         self.linear2 = nn.Linear(self.hidden_dim, embed_dim)
 
+        self.apply(default_init)
+
     def forward(self, x, t, context=None):
         out, gate = self.adaln(x, context)  # input dim, gate is for residual connection
         out = self.linear2(self.activation(self.linear1(out)))
@@ -82,6 +85,8 @@ class MLPBackbone(nn.Module):
         )
         self.temb = TimestepEmbedding(cond_dim)
         self.debed = nn.Linear(embed_dim, data_dim)
+
+        self.apply(default_init)
 
     def forward(self, x, t, context=None):
         ctx = self.temb(t) + context  # mix time and context

@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
 
+from ..utils import default_init
 from .modules import GRN, DropPath
 from .norm import CF, AdaLayerNorm
 
@@ -392,6 +393,8 @@ class ConvNextBlockND(nn.Module):
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
+        self.apply(default_init)
+
     def forward(self, x):
         input = x
         x = self.dwconv(x)
@@ -434,6 +437,8 @@ class ConvNextV2BlockND(nn.Module):
         self.grn = GRN(spatial_dims=spatial_dims, embed_dim=4 * embed_dim)
         self.pwconv2 = nn.Linear(4 * embed_dim, embed_dim)
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+
+        self.apply(default_init)
 
     def forward(self, x):
         input = x
@@ -532,12 +537,7 @@ class ConvNextEncoderND(nn.Module):
 
         self.norm = CF(nn.LayerNorm(dims[-1]))
 
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.Linear)):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            nn.init.constant_(m.bias, 0)
+        self.apply(default_init)
 
     def forward(self, x):
         for ds, st in zip(self.downsample_layers, self.stages):
@@ -627,12 +627,7 @@ class ConvNextDecoderND(nn.Module):
             self.stages.append(stage)
             cur += depths[i]
 
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.Linear)):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            nn.init.constant_(m.bias, 0)
+        self.apply(default_init)
 
     def forward(self, x):
         for us, st in zip(self.upsample_layers, self.stages):

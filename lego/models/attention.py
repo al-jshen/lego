@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..utils import default_init
 from .modules import DropPath, FeedForward
 from .norm import RMSNorm
 
@@ -137,6 +138,8 @@ class Attention(nn.Module):
         self.attn_dropout_p = attn_dropout_p
         self.resid_dropout = nn.Dropout(resid_dropout_p)
         self.causal = causal
+
+        self.apply(default_init)
 
     def forward(
         self,

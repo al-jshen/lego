@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..utils import default_init
+
 
 class Lambda(nn.Module):
     def __init__(self, fn: Callable):
@@ -20,6 +22,8 @@ class GEGLU(nn.Module):
         self.dim = dim
         self.fc = nn.Linear(dim, (embed_dim or dim) * 2, bias=False)
 
+        self.apply(default_init)
+
     def forward(self, x):
         a, b = self.fc(x).chunk(2, dim=-1)
         return a * F.gelu(b, approximate="tanh")
@@ -30,6 +34,7 @@ class SwiGLU(nn.Module):
         super().__init__()
         self.dim = dim
         self.fc = nn.Linear(dim, (embed_dim or dim) * 2, bias=False)
+        self.apply(default_init)
 
     def forward(self, x):
         a, b = self.fc(x).chunk(2, dim=-1)
@@ -78,13 +83,7 @@ class MLP(nn.Module):
             nn.Dropout(dropout),
         )
 
-        self.apply(self.init_weights)
-
-    def init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+        self.apply(default_init)
 
     def forward(self, x):
         return self.net(x)
@@ -182,6 +181,8 @@ class FeedForward(nn.Module):
         self.w13 = nn.Linear(dim, 2 * hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
         self.dropout_p = dropout
+
+        self.apply(default_init)
 
     def forward(self, x):
         x1, x3 = torch.chunk(self.w13(x), 2, dim=-1)

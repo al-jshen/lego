@@ -1,10 +1,8 @@
-import importlib
 import os
 import time
 from collections.abc import Mapping, MutableMapping, Sequence
-from contextlib import contextmanager
 from functools import reduce
-from typing import Iterable, Optional, Set, Tuple, Type
+from typing import Iterable, Set, Tuple, Type
 
 import hydra
 import numpy as np
@@ -250,6 +248,28 @@ def linear_init(layer):
     return layer
 
 
+def default_init(module):
+    """Reasonable default initialization for common layers."""
+    if isinstance(
+        module,
+        (
+            nn.Linear,
+            nn.Conv1d,
+            nn.Conv2d,
+            nn.Conv3d,
+            nn.Embedding,
+            nn.ConvTranspose1d,
+            nn.ConvTranspose2d,
+            nn.ConvTranspose3d,
+        ),
+    ):
+        return linear_init(module)
+    elif isinstance(module, (nn.LayerNorm, nn.GroupNorm)):
+        return zero_init(module)
+    else:
+        return module
+
+
 def on_channel_first(fn, x, *args, **kwargs):
     """Apply a function on a channel-first tensor, where the function expects
     to operate on a channel-last tensor."""
@@ -463,6 +483,7 @@ def freeze(model):
     for p in model.parameters():
         p.requires_grad = False
     return model
+
 
 def unfreeze(model):
     for p in model.parameters():
