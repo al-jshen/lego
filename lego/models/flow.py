@@ -51,21 +51,19 @@ class ODEFnWrapper(nn.Module):
 class MLPBackboneBlock(nn.Module):
     """MLP denoising backbone block for a token-level model"""
 
-    def __init__(self, input_dim, hidden_dim=None, output_dim=None):
+    def __init__(self, data_dim, cond_dim, hidden_dim=None):
         super().__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim or input_dim * 2
-        self.output_dim = output_dim or input_dim
-        self.temb = TimestepEmbedding(input_dim)
+        self.data_dim = data_dim
+        self.cond_dim = cond_dim
+        self.hidden_dim = hidden_dim if hidden_dim is not None else data_dim * 2
 
-        self.adaln = AdaLayerNormZero(input_dim, input_dim)
-        self.linear1 = nn.Linear(input_dim, hidden_dim)
+        self.adaln = AdaLayerNormZero(data_dim, cond_dim)
+        self.linear1 = nn.Linear(data_dim, self.hidden_dim)
         self.activation = nn.SiLU()
-        self.linear2 = nn.Linear(hidden_dim, self.output_dim)
+        self.linear2 = nn.Linear(self.hidden_dim, data_dim)
 
     def forward(self, x, t, context=None):
-        ctx = self.temb(t) + context  # mix time and context
-        out, gate = self.adaln(x, ctx)  # input dim, gate is for residual connection
+        out, gate = self.adaln(x, context)  # input dim, gate is for residual connection
         out = self.linear2(self.activation(self.linear1(out)))
         return out * gate + x
 
@@ -73,18 +71,20 @@ class MLPBackboneBlock(nn.Module):
 class MLPBackbone(nn.Module):
     """MLP denoising backbone for a token-level model"""
 
-    def __init__(self, input_dim, hidden_dim=None, output_dim=None, num_blocks=4):
+    def __init__(self, data_dim, cond_dim, hidden_dim=None, num_blocks=3):
         super().__init__()
         self.blocks = nn.ModuleList(
             [
-                MLPBackboneBlock(input_dim, hidden_dim, output_dim)
+                MLPBackboneBlock(data_dim, cond_dim, hidden_dim)
                 for _ in range(num_blocks)
             ]
         )
+        self.temb = TimestepEmbedding(cond_dim)
 
     def forward(self, x, t, context=None):
+        ctx = self.temb(t) + context  # mix time and context
         for block in self.blocks:
-            x = block(x, t, context=context)
+            x = block(x, t, context=ctx)
         return x
 
 
@@ -93,8 +93,8 @@ class RectifiedFlow(nn.Module):
         self,
         time_schedule: nn.Module,
         score_model: nn.Module,
-        conditioner: nn.Module,
-        conditioner_dropout_p: float = 0.1,
+        conditioner: nn.Module = nn.Identity(),
+        conditioner_dropout_p: float = 0.0,
     ):
         super().__init__()
         self.time_schedule = time_schedule

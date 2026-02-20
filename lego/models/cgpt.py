@@ -48,40 +48,40 @@ class ContinuousGPT(nn.Module):
         self,
         flow: nn.Module,
         token_dim: int,
-        dim: int = 4096,
+        embed_dim: int = 768,
         output_dim: Optional[int] = None,
-        n_layer: int = 32,
-        n_head: int = 32,
+        n_layer: int = 12,
+        n_head: int = 8,
         n_kv_head: Optional[int] = None,
         ffn_hidden_dim: Optional[int] = None,
         rope_base: float = 10000,
         norm_eps: float = 1e-5,
         initializer_range: float = 0.02,
         attn_dropout_p: float = 0.0,
-        resid_dropout_p: float = 0.1,
-        ffn_dropout_p: float = 0.1,
+        resid_dropout_p: float = 0.0,
+        ffn_dropout_p: float = 0.0,
         drop_path_rate: float = 0.0,
         cond_dropout_p: float = 0.0,
-        block_size: int = 256,
+        max_seq_len: int = 4096,
     ):
         super().__init__()
         self.n_head = n_head
-        self.dim = dim
-        self.output_dim = output_dim or dim
+        self.embed_dim = embed_dim
+        self.output_dim = output_dim or embed_dim
         self.token_dim = token_dim
         self.rope_base = rope_base
         self.initializer_range = initializer_range
         self.n_layer = n_layer
         self.cond_dropout_p = cond_dropout_p
-        self.block_size = block_size
+        self.max_seq_len = max_seq_len
 
-        self.tok_embeddings = nn.Linear(token_dim, dim, bias=False)
-        self.output_proj = nn.Linear(dim, self.output_dim, bias=False)
+        self.tok_embeddings = nn.Linear(token_dim, embed_dim, bias=False)
+        self.output_proj = nn.Linear(embed_dim, self.output_dim, bias=False)
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, n_layer)]
         self.layers = nn.ModuleList(
             TransformerBlock(
-                dim=dim,
+                dim=embed_dim,
                 n_head=n_head,
                 n_kv_head=n_kv_head,
                 attn_dropout_p=attn_dropout_p,
@@ -94,11 +94,11 @@ class ContinuousGPT(nn.Module):
             for i in range(n_layer)
         )
 
-        self.norm = RMSNorm(dim, eps=norm_eps)
+        self.norm = RMSNorm(embed_dim, eps=norm_eps)
         self.flow = flow
 
         self.freqs_cis = precompute_freqs_cis(
-            self.block_size, dim // n_head, self.rope_base, 0
+            self.max_seq_len, embed_dim // n_head, self.rope_base, 0
         )
 
         self.initialize_weights()
@@ -115,7 +115,7 @@ class ContinuousGPT(nn.Module):
     # ---- KV Cache Management ----
 
     def setup_caches(self, max_batch_size, max_seq_length, dtype):
-        head_dim = self.dim // self.n_head
+        head_dim = self.embed_dim // self.n_head
         max_seq_length = find_multiple(max_seq_length, 8)
         for layer in self.layers:
             layer.attention.kv_cache = KVCache(
@@ -132,7 +132,7 @@ class ContinuousGPT(nn.Module):
         self.causal_mask = causal_mask.unsqueeze(0)
 
         self.freqs_cis = precompute_freqs_cis(
-            self.block_size, self.dim // self.n_head, self.rope_base, 0
+            self.max_seq_len, self.embed_dim // self.n_head, self.rope_base, 0
         )
 
     def clear_caches(self):
