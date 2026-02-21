@@ -747,6 +747,9 @@ class Trainer:
         # move model to device
         self.model = self.model.to(self.device)
 
+        # wrap model (fsdp, checkpointing) BEFORE compile
+        self.device_mesh = self.distribute_model(self.model)
+
         if isinstance(compile, bool):
             if compile:
                 self.model = torch.compile(self.model)
@@ -756,9 +759,6 @@ class Trainer:
             raise ValueError(
                 f"compile must be bool or CompilePolicy, got {type(compile)} instead"
             )
-
-        # wrap model (fsdp, checkpointing)
-        self.device_mesh = self.distribute_model(self.model)
         self.process_group = (
             self.device_mesh.get_group("shard") if self.device_mesh else None
         )
