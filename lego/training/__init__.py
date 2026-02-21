@@ -1104,7 +1104,12 @@ class Trainer:
                     ),
                     ("Warmup Steps", self.base_optimizer.warmup_steps),
                     ("Scheduler", self.base_optimizer.scheduler),
-                    ("Scheduler max steps", self.base_optimizer.scheduler_max_steps if self.base_optimizer.scheduler_max_steps == "cosine" else "N/A"),
+                    (
+                        "Scheduler max steps",
+                        self.base_optimizer.scheduler_max_steps
+                        if self.base_optimizer.scheduler_max_steps == "cosine"
+                        else "N/A",
+                    ),
                 ],
             ),
             (

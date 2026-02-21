@@ -104,6 +104,7 @@ class RectifiedFlow(nn.Module):
         score_model: nn.Module,
         conditioner: nn.Module = nn.Identity(),
         conditioner_dropout_p: float = 0.0,
+        pred_type: str = "v",
     ):
         super().__init__()
         self.time_schedule = time_schedule
@@ -113,6 +114,7 @@ class RectifiedFlow(nn.Module):
         self.register_buffer("base_mu", torch.tensor(0.0))
         self.register_buffer("base_sigma", torch.tensor(1))
         self.base_dist = torch.distributions.Normal
+        self.pred_type = pred_type
 
     def sample_base(self, sample_shape, temperature: float = 1.0):
         return self.base_dist(self.base_mu, self.base_sigma * temperature).sample(
@@ -127,7 +129,20 @@ class RectifiedFlow(nn.Module):
         )  # sum over all data dims (not batch)
 
     def forward_score_model(self, x, t, context=None):
-        return self.score_model(x, t, context=context)
+        if self.pred_type == "v":  # predict velocity directly
+            return self.score_model(x, t, context=context)
+        elif self.pred_type == "x":  # predict x, then convert to velocity
+            t_expanded = t.view(-1, *([1] * (x.ndim - 1)))
+            x_pred = self.score_model(x, t, context=context)
+            v_pred = (x_pred - x) / (
+                1 - t_expanded + 1e-5
+            )  # add small epsilon to avoid division by zero
+            return v_pred
+        elif self.pred_type == "e":  # epsilon prediction
+            t_expanded = t.view(-1, *([1] * (x.ndim - 1)))
+            epsilon_pred = self.score_model(x, t, context=context)
+            v_pred = epsilon_pred / (t_expanded + 1e-5)
+            return v_pred
 
         # x prediction, v loss
         # t_expanded = t.view(-1, *([1] * (x.ndim - 1)))
@@ -138,11 +153,14 @@ class RectifiedFlow(nn.Module):
     def loss(self, target_samples, context=None):
         context = self.conditioner(context)
         context = self.conditioner_dropout(context)
+
         base_samples = self.sample_base(target_samples.shape)  # b c ...
         times = self.time_schedule(target_samples.shape[0]).to(base_samples)
         expand_dims = (1,) * (target_samples.ndim - 1)
         times_expanded = times.view(-1, *expand_dims)
+
         inputs = times_expanded * target_samples + (1.0 - times_expanded) * base_samples
+
         velocity = self.forward_score_model(inputs, times, context=context)
         target = target_samples - base_samples
         loss = torch.mean(
