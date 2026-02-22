@@ -216,8 +216,8 @@ def unpatchify(x, patch_size, original_size=None):
         original_size = tuple([ps * patches_per_dim for ps in patch_size])
     assert nd == len(original_size)
     expansion = (1,) * (3 - nd)
-    patch_size = patch_size + expansion
-    original_size = original_size + expansion
+    patch_size = tuple(patch_size) + expansion
+    original_size = tuple(original_size) + expansion
     num_patches = tuple([original_size[i] // patch_size[i] for i in range(3)])
     x = rearrange(
         x,
