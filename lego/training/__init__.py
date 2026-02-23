@@ -1152,10 +1152,10 @@ class Trainer:
                     ),
                     (
                         "Reshard after forward",
-                        "Enabled"
+                        "Enabled (ZeRO-3)"
                         if self.strategy
                         and self.strategy.fsdp_kwargs.get("reshard_after_forward")
-                        else "Disabled",
+                        else "Disabled (ZeRO-2)",
                     ),
                     (
                         "Activation Checkpointing",
