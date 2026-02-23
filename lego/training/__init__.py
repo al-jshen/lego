@@ -21,6 +21,8 @@ from torch.distributed.checkpoint import (
     FileSystemWriter,
 )
 from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    get_model_state_dict,
     get_state_dict,
     set_state_dict,
 )
@@ -863,6 +865,26 @@ class Trainer:
             self.ckpt_save_dir, self.model, self.optimizer, self.scheduler, epoch, step
         )
 
+    def _save_torch_checkpoint(self, epoch: int, step: int):
+        """Save model weights as a standard torch checkpoint for single-GPU loading."""
+        state_dict = get_model_state_dict(
+            self.model,
+            options=StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+            ),
+        )
+
+        if self.is_rank_zero:
+            ckpt_path = os.path.join(
+                self.ckpt_save_dir, f"epoch{epoch}_step{step}_torch.pt"
+            )
+            torch.save(state_dict, ckpt_path)
+            print(f"Standard torch checkpoint saved to {ckpt_path}")
+
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
+
     def _load_checkpoint(self, load_path: str) -> tuple[int, int]:
         # map_location = {"cuda:%d" % 0: "cuda:%d" % self.global_rank}
         # checkpoint = torch.load(path, map_location=map_location, weights_only=False)
@@ -1478,6 +1500,9 @@ class Trainer:
 
         # Ensure all pending async checkpoint operations complete before shutdown
         self.ckpt_manager.cleanup()
+
+        # Convert final checkpoint to standard torch format for single-GPU loading
+        self._save_torch_checkpoint(self.max_epochs, self.global_step)
 
         if dist.get_pg_count() > 0:
             dist.destroy_process_group()
