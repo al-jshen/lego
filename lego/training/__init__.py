@@ -329,11 +329,12 @@ class Logger:
 
 
 class WandbLogger(Logger):
-    def __init__(self, entity: str, project: str, **kwargs):
+    def __init__(self, entity: str, project: str, watch: bool = True, **kwargs):
         self.entity = entity
         self.project = project
         self.kwargs = kwargs
         self.run = None
+        self.watch = watch
 
     def setup(self, model, cfg):
         """Setup the wandb logger with the model."""
@@ -347,7 +348,8 @@ class WandbLogger(Logger):
         )
         cfg.update({f"model/{k}": v for k, v in model_summary.items()})
         wandb.config.update(cfg)
-        wandb.watch(model, log="all")
+        if self.watch:
+            wandb.watch(model, log="all")
 
     def log(self, metrics: dict, step: int = None):
         """Log metrics to Weights & Biases."""
@@ -592,10 +594,12 @@ class Trainer:
         self,
         model: Callable[[], nn.Module],
         optimizer: Optimizer,
-        train_dataset: Dataset,
+        train_dataset: Optional[Dataset] = None,
         val_dataset: Optional[Dataset] = None,
         train_collate_fn: Optional[Callable] = None,
         val_collate_fn: Optional[Callable] = None,
+        train_dataloader: Optional[Iterable] = None,
+        val_dataloader: Optional[Iterable] = None,
         max_epochs: int = 1,
         max_steps: Optional[int] = None,
         log_every_n_steps: int | Iterable[int] = 50,
@@ -636,13 +640,23 @@ class Trainer:
         self.train_collate_fn = train_collate_fn
         self.val_collate_fn = val_collate_fn
 
-        steps_per_epoch = int(
-            ceil(
-                (len(self.train_dataset) - (1 if drop_last else 0))
-                / batch_size
-                / self.world_size
+        if train_dataloader is not None:
+            self._pre_built_train_loader = train_dataloader
+            steps_per_epoch = len(train_dataloader)
+        elif train_dataset is not None:
+            self._pre_built_train_loader = None
+            steps_per_epoch = int(
+                ceil(
+                    (len(self.train_dataset) - (1 if drop_last else 0))
+                    / batch_size
+                    / self.world_size
+                )
             )
-        )
+        else:
+            raise ValueError(
+                "Either train_dataset or train_dataloader must be provided"
+            )
+        self._pre_built_val_loader = val_dataloader
 
         # figure out how many epochs to train for
         if max_epochs is not None and max_steps is not None:
@@ -739,8 +753,8 @@ class Trainer:
             enabled=self.use_amp, dtype=dtype, device_type=self.device
         )
 
-        self.train_loader = None
-        self.val_loader = None
+        self.train_loader = self._pre_built_train_loader
+        self.val_loader = self._pre_built_val_loader
 
         # ====================
         # SETUP
@@ -959,7 +973,11 @@ class Trainer:
 
     def _set_epoch_on_samplers(self, epoch: int):
         for ldr in [self.train_loader, self.val_loader]:
-            if ldr is not None and isinstance(ldr.sampler, DistributedSampler):
+            if (
+                ldr is not None
+                and hasattr(ldr, "sampler")
+                and isinstance(ldr.sampler, DistributedSampler)
+            ):
                 ldr.sampler.set_epoch(epoch)
 
     def _log(self, log_name, loss, step: Optional[int] = None):
@@ -1097,13 +1115,21 @@ class Trainer:
                         "Training steps per epoch (no accum)",
                         f"{int(ceil(len(self.train_dataset) / self.batch_size / self.world_size)):,}"
                         if self.train_dataset
-                        else "N/A",
+                        else (
+                            f"{len(self.train_loader):,}"
+                            if self.train_loader
+                            else "N/A"
+                        ),
                     ),
                     (
                         "Val steps per epoch (no accum)",
                         f"{int(ceil(len(self.val_dataset) / self.batch_size / self.world_size)):,}"
                         if self.val_dataset
-                        else "N/A",
+                        else (
+                            f"{len(self.val_loader):,}"
+                            if self.val_loader
+                            else "N/A"
+                        ),
                     ),
                     ("Custom train collate fn", self.train_collate_fn is not None),
                     ("Custom val collate fn", self.val_collate_fn is not None),
@@ -1186,12 +1212,14 @@ class Trainer:
                     ),
                     (
                         "Validate Every N Steps",
-                        self.validate_every_n_steps if self.val_dataset else "Disabled",
+                        self.validate_every_n_steps
+                        if (self.val_dataset or self.val_loader)
+                        else "Disabled",
                     ),
                     (
                         "Validate Every N Epochs",
                         self.validate_every_n_epochs
-                        if self.val_dataset
+                        if (self.val_dataset or self.val_loader)
                         else "Disabled",
                     ),
                 ],
@@ -1416,7 +1444,7 @@ class Trainer:
 
                 # optional validation
                 if (
-                    self.val_dataset is not None
+                    (self.val_dataset is not None or self.val_loader is not None)
                     and self.validate_every_n_steps
                     and self.global_step % self.validate_every_n_steps == 0
                 ):
@@ -1459,7 +1487,7 @@ class Trainer:
 
             # optional validation
             if (
-                self.val_dataset is not None
+                (self.val_dataset is not None or self.val_loader is not None)
                 and self.validate_every_n_epochs
                 and (epoch + 1) % self.validate_every_n_epochs == 0
             ):
