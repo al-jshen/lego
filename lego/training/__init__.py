@@ -1555,7 +1555,10 @@ class Trainer:
                     val_loss["loss"] += loss_aux.item()
                 else:
                     for k, v in loss_aux.items():
-                        val_loss[k] += v.item()
+                        if isinstance(v, (float, np.ndarray)):
+                            val_loss[k] += v
+                        elif isinstance(v, torch.Tensor):
+                            val_loss[k] += v.item()
                 # loss = self.extract_loss(loss_aux)
                 # val_loss += loss.item()
         for k, v in val_loss.items():
