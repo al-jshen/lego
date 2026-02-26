@@ -61,7 +61,7 @@ class ContinuousGPT(nn.Module):
         resid_dropout_p: float = 0.0,
         ffn_dropout_p: float = 0.0,
         drop_path_rate: float = 0.0,
-        cond_dropout_p: float = 0.0,
+        cond_dropout_p: float = 0.1,
         max_seq_len: int = 4096,
     ):
         super().__init__()
