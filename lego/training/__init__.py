@@ -327,6 +327,10 @@ class Logger:
         """Log metrics to the logger."""
         raise NotImplementedError("Subclasses should implement this method.")
 
+    def log_plot(self, name: str, figure, step: int = None, **kwargs):
+        """Log a matplotlib figure. Default: no-op."""
+        pass
+
 
 class WandbLogger(Logger):
     def __init__(self, entity: str, project: str, watch: bool = True, **kwargs):
@@ -357,23 +361,10 @@ class WandbLogger(Logger):
             raise RuntimeError("WandbLogger requires an active wandb run.")
         wandb.log(metrics)
 
-
-class TQDMLogger(Logger):
-    def __init__(self, total_steps: int):
-        self.total_steps = total_steps
-        self.pbar = None
-
-    def log(self, metrics: dict, step: int):
-        """Log metrics to the tqdm progress bar."""
-        if self.pbar is None:
-            self.pbar = tqdm(
-                total=self.total_steps, desc="Training Progress", unit="step"
-            )
-        self.pbar.update(step - self.pbar.n)
-        self.pbar.set_description(f"Step {step}/{self.total_steps}")
-        self.pbar.set_postfix(metrics)
-        if step == self.total_steps - 1:
-            self.pbar.close()
+    def log_plot(self, name: str, figure, step: int = None, **kwargs):
+        if not wandb.run:
+            raise RuntimeError("WandbLogger requires an active wandb run.")
+        wandb.log({name: wandb.Image(figure)}, step=step)
 
 
 class CommandLineLogger(Logger):
@@ -973,9 +964,12 @@ class Trainer:
 
     def _set_epoch_on_samplers(self, epoch: int):
         for ldr in [self.train_loader, self.val_loader]:
-            if (
-                ldr is not None
-                and hasattr(ldr, "sampler")
+            if ldr is None:
+                continue
+            if hasattr(ldr, "set_epoch"):
+                ldr.set_epoch(epoch)
+            elif (
+                hasattr(ldr, "sampler")
                 and isinstance(ldr.sampler, DistributedSampler)
             ):
                 ldr.sampler.set_epoch(epoch)
@@ -987,6 +981,10 @@ class Trainer:
             else:
                 log_dict = {f"{log_name}/{k}": v for k, v in loss.items()}
                 logger.log(log_dict, step=step)
+
+    def _log_plot(self, name: str, figure, step: int = None):
+        for logger in self.logger:
+            logger.log_plot(name, figure, step=step)
 
     def extract_loss(self, loss_aux):
         if not isinstance(loss_aux, dict):
@@ -1539,6 +1537,9 @@ class Trainer:
     # Validation
     # -------------------------------
     def validate(self):
+        if hasattr(self.model, "validate"):
+            return self.model.validate(self)
+
         self.model.eval()
         val_loss = defaultdict(float)
         with torch.no_grad(), self.autocast:
