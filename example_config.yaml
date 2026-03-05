@@ -72,6 +72,8 @@ trainer:
   batch_size: 256
   num_workers: 8
   seed: 0
+  ema_decay: 0.0 # set to e.g. 0.999 to enable EMA; disabled when 0 or 1
+  ema_eval: true # use EMA weights for validation (only when EMA is enabled)
   enable_timer: false
   limit_train_batches: null
   limit_val_batches: null

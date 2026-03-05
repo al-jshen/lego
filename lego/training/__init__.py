@@ -71,6 +71,21 @@ class ModelOptState(Stateful):
         )
 
 
+class EMAState(Stateful):
+    """Stateful wrapper for EMA parameters, enabling DCP save/load."""
+
+    def __init__(self, ema_params):
+        self.ema_params = ema_params
+
+    def state_dict(self):
+        return self.ema_params
+
+    def load_state_dict(self, state_dict):
+        for name in self.ema_params:
+            if name in state_dict:
+                self.ema_params[name].copy_(state_dict[name])
+
+
 class CheckpointManager:
     def __init__(self, async_save: bool = True, process_group=None):
         self.async_save = async_save
@@ -78,7 +93,7 @@ class CheckpointManager:
             self.pg = process_group
             self.future = None
 
-    def save(self, save_path, model, optimizer, scheduler, epoch, step):
+    def save(self, save_path, model, optimizer, scheduler, epoch, step, ema_params=None):
         if self.pg is None:
             if dist.get_pg_count() > 0:
                 self.pg = dist.new_group(backend="gloo")
@@ -92,6 +107,8 @@ class CheckpointManager:
             "epoch": epoch,
             "step": step,
         }
+        if ema_params is not None:
+            state_dict["ema"] = EMAState(ema_params)
 
         ckpt_path = os.path.join(save_path, f"epoch{epoch}_step{step}")
         os.makedirs(ckpt_path, exist_ok=True)
@@ -126,26 +143,40 @@ class CheckpointManager:
         if not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0:
             print(f"Checkpoint saved at epoch {epoch}, step {step} to {save_path}")
 
-    def load(self, load_path, model, optimizer, scheduler):
+    def load(self, load_path, model, optimizer, scheduler, ema_params=None):
         state_dict = {
             "model_opt": ModelOptState(model, optimizer),
             "scheduler": scheduler,
             "epoch": 0,
             "step": 0,
         }
-        dcp.load(
-            state_dict=state_dict,
-            # checkpoint_id=load_path,
-            storage_reader=FileSystemReader(load_path),
-        )
-        # extra_state = torch.load(
-        #     os.path.join(load_path, "extra_state.pt"),
-        #     weights_only=False,
-        # )
+
+        ema_loaded = False
+        if ema_params is not None:
+            state_dict["ema"] = EMAState(ema_params)
+            try:
+                dcp.load(
+                    state_dict=state_dict,
+                    storage_reader=FileSystemReader(load_path),
+                )
+                ema_loaded = True
+            except Exception:
+                # Checkpoint doesn't have EMA state, retry without it
+                del state_dict["ema"]
+                dcp.load(
+                    state_dict=state_dict,
+                    storage_reader=FileSystemReader(load_path),
+                )
+        else:
+            dcp.load(
+                state_dict=state_dict,
+                storage_reader=FileSystemReader(load_path),
+            )
+
         if not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0:
             print(f"Checkpoint loaded from {load_path}")
 
-        return state_dict["epoch"], state_dict["step"]
+        return state_dict["epoch"], state_dict["step"], ema_loaded
 
     def cleanup(self):
         """Ensure all pending async operations complete before shutdown."""
@@ -616,6 +647,8 @@ class Trainer:
         shuffle: bool = True,
         pin_memory: bool = True,
         seed: int = 0,
+        ema_decay: float = 0.0,
+        ema_eval: bool = True,
         enable_timer: bool = False,
         limit_train_batches: Optional[int] = None,
         limit_val_batches: Optional[int] = None,
@@ -682,6 +715,8 @@ class Trainer:
             num_workers=num_workers,
             pin_memory=pin_memory,
             shuffle=shuffle,
+            ema_decay=ema_decay,
+            ema_eval=ema_eval,
             enable_timer=enable_timer,
             limit_train_batches=limit_train_batches,
             limit_val_batches=limit_val_batches,
@@ -777,6 +812,16 @@ class Trainer:
             async_save=self.async_checkpoint
         )  # , process_group=self.process_group)
 
+        # EMA setup
+        self.ema_enabled = 0 < self.ema_decay < 1
+        if self.ema_enabled:
+            self.ema_params = {
+                name: param.data.clone()
+                for name, param in self.model.named_parameters()
+            }
+        else:
+            self.ema_params = None
+
         # resume
         self.start_epoch = 0
         self.global_step = 0
@@ -850,6 +895,23 @@ class Trainer:
         self.activation_checkpointing.wrap(model, **kwargs)
 
     # -------------------------------
+    # EMA
+    # -------------------------------
+    def _update_ema(self):
+        """Update EMA shadow parameters: ema = decay * ema + (1 - decay) * param."""
+        with torch.no_grad():
+            for name, param in self.model.named_parameters():
+                self.ema_params[name].lerp_(param.data, 1 - self.ema_decay)
+
+    def _swap_ema_params(self):
+        """Swap model parameters with EMA parameters in-place."""
+        with torch.no_grad():
+            for name, param in self.model.named_parameters():
+                tmp = param.data.clone()
+                param.data.copy_(self.ema_params[name])
+                self.ema_params[name] = tmp
+
+    # -------------------------------
     # Checkpointing
     # -------------------------------
     def _save_checkpoint(self, epoch: int, step: int):
@@ -867,7 +929,8 @@ class Trainer:
         #     print(f"[Rank {self.global_rank}] Checkpoint saved at epoch {epoch}, step {step} to {self.ckpt_save_dir}")
 
         self.ckpt_manager.save(
-            self.ckpt_save_dir, self.model, self.optimizer, self.scheduler, epoch, step
+            self.ckpt_save_dir, self.model, self.optimizer, self.scheduler, epoch, step,
+            ema_params=self.ema_params,
         )
 
     def _save_torch_checkpoint(self, epoch: int, step: int):
@@ -880,12 +943,31 @@ class Trainer:
             ),
         )
 
+        ema_state_dict = None
+        if self.ema_enabled:
+            self._swap_ema_params()
+            ema_state_dict = get_model_state_dict(
+                self.model,
+                options=StateDictOptions(
+                    full_state_dict=True,
+                    cpu_offload=True,
+                ),
+            )
+            self._swap_ema_params()
+
         if self.is_rank_zero:
             ckpt_path = os.path.join(
                 self.ckpt_save_dir, f"epoch{epoch}_step{step}_torch.pt"
             )
             torch.save(state_dict, ckpt_path)
             print(f"Standard torch checkpoint saved to {ckpt_path}")
+
+            if ema_state_dict is not None:
+                ema_ckpt_path = os.path.join(
+                    self.ckpt_save_dir, f"epoch{epoch}_step{step}_ema_torch.pt"
+                )
+                torch.save(ema_state_dict, ema_ckpt_path)
+                print(f"EMA torch checkpoint saved to {ema_ckpt_path}")
 
         if dist.is_available() and dist.is_initialized():
             dist.barrier()
@@ -923,9 +1005,13 @@ class Trainer:
         # self.scheduler.load_state_dict(extra_state["scheduler_state_dict"])
         # self.start_epoch = extra_state["epoch"]
         # self.global_step = extra_state["global_step"]
-        return self.ckpt_manager.load(
-            load_path, self.model, self.optimizer, self.scheduler
+        epoch, step, ema_loaded = self.ckpt_manager.load(
+            load_path, self.model, self.optimizer, self.scheduler, self.ema_params
         )
+        if self.ema_enabled and not ema_loaded:
+            for name, param in self.model.named_parameters():
+                self.ema_params[name].copy_(param.data)
+        return epoch, step
 
     def _prepare_dataloader(
         self, dataset: Optional[Dataset], split: Optional[str] = None
@@ -1156,6 +1242,14 @@ class Trainer:
                         if self.base_optimizer.scheduler_max_steps == "cosine"
                         else "N/A",
                     ),
+                    (
+                        "EMA Decay",
+                        self.ema_decay if self.ema_enabled else "Disabled",
+                    ),
+                    (
+                        "EMA Eval",
+                        self.ema_eval if self.ema_enabled else "N/A",
+                    ),
                 ],
             ),
             (
@@ -1379,6 +1473,9 @@ class Trainer:
                         if self.scheduler:
                             self.scheduler.step()
 
+                        if self.ema_enabled:
+                            self._update_ema()
+
                 self.global_step += 1
 
                 # logging
@@ -1455,7 +1552,11 @@ class Trainer:
                         print(
                             f"[Rank {self.global_rank}] Validating after step {self.global_step}"
                         )
+                    if self.ema_enabled and self.ema_eval:
+                        self._swap_ema_params()
                     loss_aux = self.validate()
+                    if self.ema_enabled and self.ema_eval:
+                        self._swap_ema_params()
 
                     if self.is_rank_zero and self.logger:
                         if not isinstance(loss_aux, dict):
@@ -1499,7 +1600,11 @@ class Trainer:
                         f"[Rank {self.global_rank}] Validating after epoch {epoch + 1}"
                     )
 
+                if self.ema_enabled and self.ema_eval:
+                    self._swap_ema_params()
                 loss_aux = self.validate()
+                if self.ema_enabled and self.ema_eval:
+                    self._swap_ema_params()
 
                 if self.is_rank_zero and self.logger:
                     if not isinstance(loss_aux, dict):
