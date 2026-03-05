@@ -40,6 +40,18 @@ class BetaSchedule(TimeSchedule):
         )
 
 
+class LogitNormalSchedule(TimeSchedule):
+    def __init__(self, mean: float = 0.0, std: float = 1.0):
+        super().__init__()
+        self.mean = mean
+        self.std = std
+
+    def forward(self, batch_size: int):
+        return torch.sigmoid(
+            torch.distributions.Normal(self.mean, self.std).sample((batch_size,))
+        )
+
+
 class ODEFnWrapper(nn.Module):
     def __init__(self, ode_func):
         super().__init__()
