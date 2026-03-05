@@ -100,6 +100,11 @@ class MLPBackbone(nn.Module):
 
         self.apply(default_init)
 
+        # start at zero
+        nn.init.zeros(self.debed.weight)
+        nn.init.zeros(self.debed.bias)
+
+
     def forward(self, x, t, context=None):
         ctx = self.temb(t) + context  # mix time and context
         x = self.embed(x)
