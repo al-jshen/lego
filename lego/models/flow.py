@@ -101,8 +101,8 @@ class MLPBackbone(nn.Module):
         self.apply(default_init)
 
         # start at zero
-        nn.init.zeros(self.debed.weight)
-        nn.init.zeros(self.debed.bias)
+        nn.init.zeros_(self.debed.weight)
+        nn.init.zeros_(self.debed.bias)
 
 
     def forward(self, x, t, context=None):
