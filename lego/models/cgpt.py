@@ -163,7 +163,7 @@ class ContinuousGPT(nn.Module):
             (prefix conditioning tokens are stripped from the output).
         """
         b, s = idx.shape[:2]
-        x = idx.reshape(b, s, -1)
+        x = idx.reshape(b, s, self.token_dim)
         x = self.tok_embeddings(x)
 
         n_cond = 0
