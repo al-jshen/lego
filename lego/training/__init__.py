@@ -502,25 +502,9 @@ class Optimizer:
         self.warmup_steps = warmup_steps
         self.min_lr = min_lr
 
-    def setup(
-        self, model
-    ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler._LRScheduler]:
-        decay_params = []
-        no_decay_params = []
-        for name, param in model.named_parameters():
-            if not param.requires_grad:
-                continue
-            if param.ndim >= 2:  # usually weight matrices
-                decay_params.append(param)
-            else:  # biases, norm weights
-                no_decay_params.append(param)
-
-        optim_groups = [
-            {"params": decay_params, "weight_decay": self.weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ]
-
-        optimizer = optim.AdamW(optim_groups, lr=self.lr, betas=self.betas)
+    def setup_scheduler(
+        self, optimizer: torch.optim.Optimizer
+    ) -> torch.optim.lr_scheduler._LRScheduler:
         schedulers = []
         if self.warmup_steps > 0:
             schedulers.append(
@@ -570,6 +554,28 @@ class Optimizer:
             if len(schedulers) > 1
             else schedulers[0]
         )
+        return lr_scheduler
+
+    def setup(
+        self, model
+    ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler._LRScheduler]:
+        decay_params = []
+        no_decay_params = []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if param.ndim >= 2:  # usually weight matrices
+                decay_params.append(param)
+            else:  # biases, norm weights
+                no_decay_params.append(param)
+
+        optim_groups = [
+            {"params": decay_params, "weight_decay": self.weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ]
+
+        optimizer = optim.AdamW(optim_groups, lr=self.lr, betas=self.betas)
+        lr_scheduler = self.setup_scheduler(optimizer)
         return optimizer, lr_scheduler
 
 
@@ -634,6 +640,7 @@ class Trainer:
         ckpt_save_dir: str = "./checkpoints",
         ckpt_load_dir: Optional[str] = None,
         reset_steps: bool = False,
+        reset_scheduler: bool = False,
         ckpt_every_n_steps: Optional[int] = None,
         ckpt_every_n_epochs: int = 1,
         validate_every_n_steps: Optional[int] = None,
@@ -702,6 +709,7 @@ class Trainer:
             ckpt_save_dir=ckpt_save_dir,
             ckpt_load_dir=ckpt_load_dir,
             reset_steps=reset_steps,
+            reset_scheduler=reset_scheduler,
             ckpt_every_n_steps=ckpt_every_n_steps,
             ckpt_every_n_epochs=ckpt_every_n_epochs,
             validate_every_n_steps=validate_every_n_steps,
@@ -827,11 +835,16 @@ class Trainer:
         self.global_step = 0
         if self.ckpt_load_dir:
             epoch, step = self._load_checkpoint(self.ckpt_load_dir)
-            if not self.reset_steps:
+            if self.reset_steps:
+                self.optimizer, self.scheduler = self.base_optimizer.setup(self.model)
+            elif self.reset_scheduler:
+                for group in self.optimizer.param_groups:
+                    group['lr'] = self.base_optimizer.lr
+                    group.pop('initial_lr', None)
+                self.scheduler = self.base_optimizer.setup_scheduler(self.optimizer)
+            else:
                 self.start_epoch = epoch
                 self.global_step = step
-            else:
-                self.optimizer, self.scheduler = self.base_optimizer.setup(self.model)
             if (
                 not (dist.is_available() and dist.is_initialized())
                 or dist.get_rank() == 0
