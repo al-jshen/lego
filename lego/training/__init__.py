@@ -143,13 +143,14 @@ class CheckpointManager:
         if not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0:
             print(f"Checkpoint saved at epoch {epoch}, step {step} to {save_path}")
 
-    def load(self, load_path, model, optimizer, scheduler, ema_params=None):
+    def load(self, load_path, model, optimizer, scheduler, ema_params=None, load_scheduler=True):
         state_dict = {
             "model_opt": ModelOptState(model, optimizer),
-            "scheduler": scheduler,
             "epoch": 0,
             "step": 0,
         }
+        if load_scheduler:
+            state_dict["scheduler"] = scheduler
 
         ema_loaded = False
         if ema_params is not None:
@@ -834,7 +835,10 @@ class Trainer:
         self.start_epoch = 0
         self.global_step = 0
         if self.ckpt_load_dir:
-            epoch, step = self._load_checkpoint(self.ckpt_load_dir)
+            skip_scheduler = self.reset_steps or self.reset_scheduler
+            epoch, step = self._load_checkpoint(
+                self.ckpt_load_dir, load_scheduler=not skip_scheduler
+            )
             if self.reset_steps:
                 self.optimizer, self.scheduler = self.base_optimizer.setup(self.model)
             elif self.reset_scheduler:
@@ -985,7 +989,7 @@ class Trainer:
         if dist.is_available() and dist.is_initialized():
             dist.barrier()
 
-    def _load_checkpoint(self, load_path: str) -> tuple[int, int]:
+    def _load_checkpoint(self, load_path: str, load_scheduler: bool = True) -> tuple[int, int]:
         # map_location = {"cuda:%d" % 0: "cuda:%d" % self.global_rank}
         # checkpoint = torch.load(path, map_location=map_location, weights_only=False)
         # self.model.load_state_dict(checkpoint["model"])
@@ -1019,7 +1023,8 @@ class Trainer:
         # self.start_epoch = extra_state["epoch"]
         # self.global_step = extra_state["global_step"]
         epoch, step, ema_loaded = self.ckpt_manager.load(
-            load_path, self.model, self.optimizer, self.scheduler, self.ema_params
+            load_path, self.model, self.optimizer, self.scheduler, self.ema_params,
+            load_scheduler=load_scheduler,
         )
         if self.ema_enabled and not ema_loaded:
             for name, param in self.model.named_parameters():
