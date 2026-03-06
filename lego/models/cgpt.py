@@ -189,9 +189,6 @@ class ContinuousGPT(nn.Module):
         x = self.norm(x)
         x = self.output_proj(x)
 
-        if n_cond > 0:
-            x = x[:, n_cond:]
-
         return x
 
     # ---- Training ----
@@ -215,8 +212,16 @@ class ContinuousGPT(nn.Module):
             keep = (torch.rand(x.shape[0], 1, 1, device=cond.device) >= self.cond_dropout_p).to(cond.dtype)
             cond = cond * keep
 
-        x_in, x_out = x[:, :-1], x[:, 1:]
-        conditioner = self(idx=x_in, cond=cond)
+        n_cond = cond.shape[1] if cond is not None else 0
+        conditioner = self(idx=x[:, :-1], cond=cond)
+
+        if n_cond > 0:
+            conditioner = conditioner[:, n_cond - 1:]
+            x_out = x
+        else:
+            conditioner = conditioner
+            x_out = x[:, 1:]
+
         x_out = rearrange(x_out, "b s ... -> (b s) ...")
         conditioner = rearrange(conditioner, "b s ... -> (b s) ...")
         loss = self.flow.step((x_out, conditioner))
