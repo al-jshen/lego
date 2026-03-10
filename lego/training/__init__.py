@@ -287,7 +287,8 @@ class FSDPStrategy(Strategy):
         # apply fully_shard to model modules
         if len(self.modules_to_wrap) > 0:
             for name, module in model.named_children():
-                if isinstance(module, self.modules_to_wrap):
+                # make sure we aren't already wrapped
+                if isinstance(module, self.modules_to_wrap) and not isinstance(module, torch.distributed.fsdp.FSDPModule):
                     fully_shard(module, mesh=device_mesh, **self.fsdp_kwargs)
                 else:
                     # recurse in
