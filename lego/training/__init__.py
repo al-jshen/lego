@@ -235,6 +235,7 @@ class FSDPStrategy(Strategy):
         reshard_after_forward: Optional[bool] = None,
         cpu_offload: bool = False,
         mixed_precision_policy: Optional[MixedPrecisionPolicy] = None,
+        register_methods: Iterable[str] = [],
         **kwargs,
     ):
         self.modules_to_wrap = tuple(set(modules_to_wrap))
@@ -246,6 +247,7 @@ class FSDPStrategy(Strategy):
         if mixed_precision_policy is not None:
             self.fsdp_kwargs["mp_policy"] = mixed_precision_policy
         self.fsdp_kwargs["reshard_after_forward"] = reshard_after_forward
+        self.register_methods = register_methods
 
     def setup_device_mesh(
         self, world_size: int, local_world_size: int
@@ -295,7 +297,12 @@ class FSDPStrategy(Strategy):
                     self.wrap(module, device_mesh, top_level=False)
 
         if top_level:
+            # shard full model
             fully_shard(model, mesh=device_mesh, **self.fsdp_kwargs)
+
+            # register forward hooks into additional methods
+            for method in self.register_methods:
+                torch.distributed.fsdp.register_fsdp_forward_method(model, method)
 
 
 class ActivationCheckpointingStrategy(Strategy):
