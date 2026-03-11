@@ -150,12 +150,24 @@ class Attention(nn.Module):
         kv: Optional[torch.Tensor] = None,
     ):
         bsz, seqlen, _ = x.shape
+
+        # always take queries from x
         xq = self.wq(x)
-        xk, xv = self.wkv(x).chunk(2, dim=-1)
+
+        # if kv is provided, use it as the source for keys/values (cross-attention)
+        if kv is not None:
+            kv_bsz, kv_seqlen, _ = kv.shape
+            assert (
+                kv_bsz == bsz
+            ), f"kv batch ({kv_bsz}) must match x batch ({bsz}) for cross-attention"
+            xk, xv = self.wkv(kv).chunk(2, dim=-1)
+        else:
+            kv_seqlen = seqlen
+            xk, xv = self.wkv(x).chunk(2, dim=-1)
 
         xq = xq.view(bsz, seqlen, self.n_head, self.head_dim)
-        xk = xk.view(bsz, seqlen, self.n_kv_head, self.head_dim)
-        xv = xv.view(bsz, seqlen, self.n_kv_head, self.head_dim)
+        xk = xk.view(bsz, kv_seqlen, self.n_kv_head, self.head_dim)
+        xv = xv.view(bsz, kv_seqlen, self.n_kv_head, self.head_dim)
 
         xq = self.qnorm(xq)
         xk = self.knorm(xk)
@@ -165,7 +177,8 @@ class Attention(nn.Module):
 
         xq, xk, xv = map(lambda x: x.transpose(1, 2), (xq, xk, xv))
 
-        if self.kv_cache is not None:
+        # only use KV cache for self-attention; for cross-attention we use the provided kv tensor
+        if self.kv_cache is not None and kv is None:
             keys, values = self.kv_cache.update(input_pos, xk, xv)
         else:
             keys, values = xk, xv
@@ -176,8 +189,8 @@ class Attention(nn.Module):
             # match batch size to xq/keys/values
             nrep = bsz // mask.shape[0]
             mask = mask.repeat(nrep, *(1 for _ in range(mask.ndim - 1)))
-            # ok, so now mask is [bsz, seqlen, seqlen]
-            # but xq and keys are possibly [bsz, ..., seqlen, seqlen]
+            # ok, so now mask is [bsz, tgt_len, src_len]
+            # but xq and keys are possibly [bsz, ..., tgt_len, src_len]
             # so we need to expand mask to match the shape of xq and keys
             n_expand = xq.ndim - mask.ndim
             for _ in range(n_expand):
@@ -188,7 +201,8 @@ class Attention(nn.Module):
             keys,
             values,
             attn_mask=mask,
-            is_causal=self.causal and mask is None,  # is_causal=False is for KV cache
+            # cross-attention is non-causal; keep causal masking only for self-attention
+            is_causal=self.causal and mask is None and kv is None,
             dropout_p=self.attn_dropout_p if self.training else 0,
         )
 
