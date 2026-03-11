@@ -172,8 +172,11 @@ class Attention(nn.Module):
         xq = self.qnorm(xq)
         xk = self.knorm(xk)
 
-        xq = apply_rotary_emb(xq, freqs_cis)
-        xk = apply_rotary_emb(xk, freqs_cis)
+        freqs_q = freqs_cis[:seqlen]
+        freqs_k = freqs_cis[:kv_seqlen]
+
+        xq = apply_rotary_emb(xq, freqs_q)
+        xk = apply_rotary_emb(xk, freqs_k)
 
         xq, xk, xv = map(lambda x: x.transpose(1, 2), (xq, xk, xv))
 
