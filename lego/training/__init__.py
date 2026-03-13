@@ -27,6 +27,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_state_dict,
 )
 from torch.distributed.checkpoint.stateful import Stateful
+from torch.distributed._tensor import DTensor
 from torch.distributed.fsdp import (
     CPUOffloadPolicy,
     MixedPrecisionPolicy,
@@ -833,7 +834,11 @@ class Trainer:
         self.ema_enabled = 0 < self.ema_decay < 1
         if self.ema_enabled:
             self.ema_params = {
-                name: param.data.clone()
+                name: (
+                    param.data._local_tensor.clone()
+                    if isinstance(param.data, DTensor)
+                    else param.data.clone()
+                )
                 for name, param in self.model.named_parameters()
             }
         else:
@@ -926,14 +931,23 @@ class Trainer:
         """Update EMA shadow parameters: ema = decay * ema + (1 - decay) * param."""
         with torch.no_grad():
             for name, param in self.model.named_parameters():
-                self.ema_params[name].lerp_(param.data, 1 - self.ema_decay)
+                if isinstance(param.data, DTensor):
+                    current = param.data._local_tensor
+                else:
+                    current = param.data
+                self.ema_params[name].lerp_(current, 1 - self.ema_decay)
 
     def _swap_ema_params(self):
         """Swap model parameters with EMA parameters in-place."""
         with torch.no_grad():
             for name, param in self.model.named_parameters():
-                tmp = param.data.clone()
-                param.data.copy_(self.ema_params[name])
+                if isinstance(param.data, DTensor):
+                    current = param.data._local_tensor
+                else:
+                    current = param.data
+
+                tmp = current.clone()
+                current.copy_(self.ema_params[name])
                 self.ema_params[name] = tmp
 
     # -------------------------------
@@ -1036,7 +1050,11 @@ class Trainer:
         )
         if self.ema_enabled and not ema_loaded:
             for name, param in self.model.named_parameters():
-                self.ema_params[name].copy_(param.data)
+                if isinstance(param.data, DTensor):
+                    src = param.data._local_tensor
+                else:
+                    src = param.data
+                self.ema_params[name].copy_(src)
         return epoch, step
 
     def _prepare_dataloader(
