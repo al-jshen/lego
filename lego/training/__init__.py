@@ -935,6 +935,7 @@ class Trainer:
                     current = param.data._local_tensor
                 else:
                     current = param.data
+                current = current.to(self.ema_params[name].dtype)
                 self.ema_params[name].lerp_(current, 1 - self.ema_decay)
 
     def _swap_ema_params(self):
