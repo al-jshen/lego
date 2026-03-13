@@ -663,7 +663,7 @@ class Trainer:
         shuffle: bool = True,
         pin_memory: bool = True,
         seed: int = 0,
-        ema_decay: float = 0.0,
+        ema_decay: float = 0.9999,
         ema_eval: bool = True,
         enable_timer: bool = False,
         limit_train_batches: Optional[int] = None,
