@@ -1686,9 +1686,9 @@ class Trainer:
     # -------------------------------
     # Validation
     # -------------------------------
-    def validate(self):
+    def validate(self, **kwargs):
         if hasattr(self.model, "validate"):
-            return self.model.validate(self)
+            return self.model.validate(self, **kwargs)
 
         self.model.eval()
         val_loss = defaultdict(float)
