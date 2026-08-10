@@ -571,17 +571,21 @@ class Optimizer:
     ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler._LRScheduler]:
         decay_params = []
         no_decay_params = []
+        decay_names = []
+        no_decay_names = []
         for name, param in model.named_parameters():
             if not param.requires_grad:
                 continue
             if param.ndim >= 2:  # usually weight matrices
                 decay_params.append(param)
+                decay_names.append(name)
             else:  # biases, norm weights
                 no_decay_params.append(param)
+                no_decay_names.append(name)
 
         optim_groups = [
-            {"params": decay_params, "weight_decay": self.weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
+            {"params": decay_params, "weight_decay": self.weight_decay, "names": decay_names},
+            {"params": no_decay_params, "weight_decay": 0.0, "names": no_decay_names},
         ]
 
         optimizer = optim.AdamW(optim_groups, lr=self.lr, betas=self.betas)
